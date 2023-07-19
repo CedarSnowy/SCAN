@@ -51,11 +51,9 @@ class Earl(Module):
     def forward(self,graph,encoder_output,seed_entities,sample_mask,node2nodeId):
         sub_embeddings = []
 
-        all_rel = graph.edata['edge_type']
 
         id2embedding = {}
 
-        obj_embeddings = [None] * len(all_rel)
 
         heads,tails = graph.edges()[0].tolist(),graph.edges()[1].tolist()
 
@@ -63,12 +61,17 @@ class Earl(Module):
 
         # print(seed_entities)
         # #print(sample_mask)
-        # print('seed',seed_entities)
+        #print('seed',seed_entities)
         # print('graph.ndata',graph.ndata["nodeId"])
      
         # print('graph.edata',graph.edata)
         # print('graph.edges()',graph.edges())
         # print('dict',node2nodeId)
+        # print('heads',heads,'tails',tails)
+
+        all_rel = graph.edata['edge_type']
+        # print('all_rel',all_rel)
+   
         # print('sample mask',len(sample_mask))
 
         for i in range(len(seed_entities)):
@@ -115,12 +118,17 @@ class Earl(Module):
                 #obj_embeddings[indices[idx_rel]] = obj_embedding.squeeze()
                 idx_rel += 1
         
-        #print('id2embedding',id2embedding)
+        # print('id2embedding',id2embedding.keys())
+        # print('old_ndata',old_ndata)
 
         new_ndata = []
         for id in old_ndata:
             reindex_id = node2nodeId[id]
-            new_ndata.append(id2embedding[reindex_id])
+
+            if reindex_id in id2embedding:
+                new_ndata.append(id2embedding[reindex_id])
+            else:
+                new_ndata.append(torch.randn(768).to(self.device))
 
         # for key,value in node2nodeId.items():
         #     new_ndata.append(id2embedding[value])

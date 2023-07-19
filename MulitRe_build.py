@@ -57,6 +57,9 @@ class MultiReModel(nn.Module):
         self.model_directory = opt["model_directory"]
         self.model_name = opt["model_name"]
 
+        self.n_hop=opt['n_hop']
+        self.n_max = opt['n_max']
+
         self.entity_emb_seen = Embedding(self.n_entity_seen + 1, 768)
         self.entity_emb_seen.weight.data.copy_(opt["entity_embeddings_seen"])
         #opt["entity_embedding"]就是所有的embedding
@@ -105,17 +108,20 @@ class MultiReModel(nn.Module):
 
 
     def process_batch(self, batch_data,train):     
-        batch_loss = []
-        flag,batch_data = batch_data['flag'],batch_data['datas']
-        print('flag',flag)
 
-        for data in batch_data:
+        batch_loss = []
+
+        for one_batch_data in batch_data:
             one_dialog_loss = []
-            for sample in data:
-                dialogue_representation, seed_entities, subgraph, paths = sample[0],sample[1],sample[2],sample[3]
-                sample_mask = sample[4] if len(sample) >= 5 else None
-                node2nodeId = sample[5] if len(sample) >= 5 else None
-                if sample_mask is not None and len(sample_mask) == 0 or len(seed_entities) == 0:
+            flag,sample_num = one_batch_data[6],one_batch_data[7]
+
+            for i in range(sample_num):
+                dialogue_representation, seed_entities, subgraph, paths,sample_mask,node2nodeID = one_batch_data[0][i],one_batch_data[1][i],one_batch_data[2][i],one_batch_data[3][i],one_batch_data[4][i],one_batch_data[5][i]
+                # sample_mask = sample[4] if len(sample) >= 5 else None
+                # node2nodeId = sample[5] if len(sample) >= 5 else None
+                if len(seed_entities) == 0:
+                    continue
+                elif flag == 0 and len(sample_mask) == 0:
                     continue
                 else:
                     updated_subgraphs = []
@@ -124,7 +130,7 @@ class MultiReModel(nn.Module):
                     subgraph = subgraph.to(self.device)
                     path = paths.to(self.device)
              
-                    updated_subgraph, expilcit_entity_rep = self(dialogue_representation, seed_entity, subgraph,sample_mask,node2nodeId,flag)
+                    updated_subgraph, expilcit_entity_rep = self(dialogue_representation, seed_entity, subgraph,sample_mask,node2nodeID,flag)
                     updated_subgraphs.append(updated_subgraph)
 
                     instance_loss = _get_instance_path_loss(updated_subgraph, path)
@@ -161,38 +167,50 @@ class MultiReModel(nn.Module):
 
         return batch_loss.item()
     
-    def train_model(self, MulitRe_dataset_train):
+    def train_model(self,train_dataloader,valid_dataloader):
         self.optimizer.zero_grad()
-        ins=0
+        ins = 0 
         for epoch in range(self.epochs):
             self.train()
+
+            # 训练阶段
             train_loss = 0
             cnt = 0
-
-            dialogID = 11750
-            # 训练阶段
-            while dialogID - 1<= MulitRe_dataset_train.train_unseen[1]:
-                print('dialogID',dialogID)
-                batch_data = MulitRe_dataset_train.get_batch_data(dialogID)
-                batch_loss = self.process_batch(batch_data,True)
-                train_loss += batch_loss 
+            for batch in tqdm(train_dataloader):
+                train_loss += self.process_batch(batch,True)
                 cnt += 1
-                dialogID += len(batch_data['datas'])
-            
-            #train_loss = train_loss/cnt
+            train_loss /= cnt
 
-            
+            # 验证阶段
             cnt = 0
             dev_loss = 0
-            while MulitRe_dataset_train.valid_seen[0] <= dialogID - 1 <= MulitRe_dataset_train.valid_unseen[1]:
-                print('dialogID',dialogID)
-                batch_data = MulitRe_dataset_train.get_batch_data(dialogID)
-                batch_loss = self.process_batch(batch_data,False)
-                dev_loss += batch_loss 
+            for batch in tqdm(valid_dataloader):
+                batch_loss = self.process_batch(batch,False)
+                dev_loss += batch_loss
                 cnt += 1
-                dialogID += len(batch_data)
-        
-            dev_loss = dev_loss/cnt
+
+            dev_loss /= cnt
+
+            # # 训练阶段
+            # while dialogID - 1<= MulitRe_dataset_train.train_unseen[1]:
+            #     print('dialogID',dialogID)
+            #     batch_data = MulitRe_dataset_train.get_batch_data(dialogID)
+            #     batch_loss = self.process_batch(batch_data,True)
+            #     train_loss += batch_loss 
+            #     cnt += 1
+            #     dialogID += len(batch_data['datas'])
+            
+            # #train_loss = train_loss/cnt
+
+            
+
+            # while MulitRe_dataset_train.valid_seen[0] <= dialogID - 1 <= MulitRe_dataset_train.valid_unseen[1]:
+            #     print('dialogID',dialogID)
+            #     batch_data = MulitRe_dataset_train.get_batch_data(dialogID)
+            #     batch_loss = self.process_batch(batch_data,False)
+            #     dev_loss += batch_loss 
+            #     cnt += 1
+            #     dialogID += len(batch_data)
             
             self.lr_scheduler.step(dev_loss)
             print("Epoch: %d, Train Loss: %f" %(epoch, train_loss))
@@ -204,5 +222,5 @@ class MultiReModel(nn.Module):
             # logger.scalar_summary("Dev Loss", dev_loss, ins+1)
             ins+=1
             if (epoch+1)%2==0:
-                torch.save(self.state_dict(), self.model_directory+self.model_name+"_"+str(epoch+1))       
+                torch.save(self.state_dict(), f'{self.model_directory}_{self.model_name}_epoch-{epoch+1}_nhop-{self.n_hop}_nmax-{self.n_max}')       
 

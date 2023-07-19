@@ -87,13 +87,8 @@ def save_kg(file_path):
     kg_whole = get_whole_kg(file_path)
 
     # 10048个entity
-    item_count = 0  # 初始项总数为0
 
     # 173572个triple
-    for value_list in kg_whole.values():
-        item_count += len(value_list)
-    
-    print(item_count)
 
     kg_seen = {
         key: value for key, value in kg_whole.items() if key not in unseen_entity
@@ -211,8 +206,10 @@ def process_dialog(file,seen_percentage,max_history_num):
     train_seen = [0,int(train * seen_percentage)-1]
     train_unseen = [int(train * seen_percentage) ,10583 -1]
     valid_seen = [10583,10583 + int(valid * seen_percentage)-1]
-    valid_unseen = [10583 + int(valid * seen_percentage),12983 - 1200]
-    print('train_seen,train_unseen,valid_seen,valid_unseen',train_seen,train_unseen,valid_seen,valid_unseen)
+    valid_unseen = [10583 + int(valid * seen_percentage),12983 - 1200 -1]
+    test_seen = [12983 - 1200,12983 - 600 -1 ]
+    test_unseen = [12983 - 600,12983]
+    print('train_seen,train_unseen,valid_seen,valid_unseen,test_seen,test_unseen',train_seen,train_unseen,valid_seen,valid_unseen,test_seen,test_unseen)
 
     # 处理unseen部分
     dialog_mask = {}
@@ -300,16 +297,23 @@ def process_dialog(file,seen_percentage,max_history_num):
                 samples.append(one_sample)
 
         samples_flag['samples'] = samples
-        if  train_unseen[0] <= dialogID -1  <= train_unseen[1] or valid_unseen[0] <= dialogID -1 <= valid_unseen[1] or dialogID -1>=valid_unseen[1] +600:
+        # flag为1，代表使用AttnIO;为0，代表使用EARL
+        if  train_unseen[0] <= dialogID -1  <= train_unseen[1] or valid_unseen[0] <= dialogID -1 <= valid_unseen[1] or dialogID -1 >= valid_unseen[1] +600:
             samples_flag['flag'] = 0
         else:
             samples_flag['flag'] = 1
+        
+        # state为train，代表查找seen部分；为test，代表查找unseen部分
+        if train_seen[0] <= dialogID - 1 <= test_seen[1]:
+            samples_flag['state'] = 'train'
+        else:
+            samples_flag['state'] = 'test'
+        
 
         dialog_samples[dialogID] = samples_flag
         dialogID += 1
-    print(dialog_samples[11750])
-    #print(dialog_mask[10000])
-    #print(dialog_samples[10000])
+
+
     return dialog_samples
 
 
@@ -331,7 +335,6 @@ def encoder_dialog(dialog_samples):
                 samples[i] = sample
             
             samples_flag['samples'] = samples
-
 
         else:
             samples = samples_flag['samples']
