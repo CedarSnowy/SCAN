@@ -9,7 +9,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Embedding
 from sklearn.metrics import roc_auc_score
+from torch import tensor
 from Earl import Earl
+from copy import deepcopy
 
 
 from tqdm import tqdm
@@ -55,16 +57,17 @@ class MultiReModel(nn.Module):
         self.model_directory = opt["model_directory"]
         self.model_name = opt["model_name"]
 
-        self.entity_emb_seen = Embedding(self.n_entity_seen, 768)
+        self.entity_emb_seen = Embedding(self.n_entity_seen + 1, 768)
         self.entity_emb_seen.weight.data.copy_(opt["entity_embeddings_seen"])
         #opt["entity_embedding"]就是所有的embedding
-        self.relation_emb = Embedding(self.n_relation, 768)
+        self.relation_emb = Embedding(self.n_relation + 1, 768)
         self.relation_emb.weight.data.copy_(opt["relation_embeddings"])
 
         self.attnIO = AttnIO(self.in_dim, self.out_dim, self.attn_heads, self.entity_emb_seen, self.relation_emb, self.self_loop_id, self.device)
-        self.earl = Earl()
+        self.earl = Earl(self.in_dim,opt["relation_embeddings"],self.device)
         
-        self.model=self.model.cuda()
+        self.attnIO = self.attnIO.cuda()
+        self.earl=self.earl.cuda()
         self.optimizer = torch.optim.Adam( filter(lambda p: p.requires_grad, self.parameters()), self.lr)
         self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=10)
 
@@ -90,44 +93,73 @@ class MultiReModel(nn.Module):
             m[k] = round_sigfigs(v, 4)
         return m
 
-    def forward(self, dialogue_representation, seed_entities, subgraph,flag):
-        subgraph = self.model(subgraph, seed_entities, dialogue_representation)
+    def forward(self, dialogue_representation, seed_entities, subgraph,sample_mask,node2nodeId,flag):
+        if flag == 0:
+            graph = deepcopy(subgraph)
+            new_ndata = self.earl(graph = graph,encoder_output = dialogue_representation, seed_entities = seed_entities,sample_mask = sample_mask,node2nodeId = node2nodeId)
+            subgraph = self.attnIO(graph = subgraph, seed_set = seed_entities, dialogue_context = dialogue_representation,unseen_embeddings = new_ndata,flag = flag)
+        else:
+            #print(subgraph.ndata)
+            subgraph = self.attnIO(subgraph, seed_entities, dialogue_representation)
         return subgraph
 
 
     def process_batch(self, batch_data,train):     
         batch_loss = []
         flag,batch_data = batch_data['flag'],batch_data['datas']
+        print('flag',flag)
+
         for data in batch_data:
-            one_dialog_loss = 0
+            one_dialog_loss = []
             for sample in data:
                 dialogue_representation, seed_entities, subgraph, paths = sample[0],sample[1],sample[2],sample[3]
-                sample_mask = sample[4] if len(sample) == 5 else None
+                sample_mask = sample[4] if len(sample) >= 5 else None
+                node2nodeId = sample[5] if len(sample) >= 5 else None
+                if sample_mask is not None and len(sample_mask) == 0 or len(seed_entities) == 0:
+                    continue
+                else:
+                    updated_subgraphs = []
+                    dialogue_representation = dialogue_representation.to(self.device) # [1,768]
+                    seed_entity = seed_entities.to(self.device)
+                    subgraph = subgraph.to(self.device)
+                    path = paths.to(self.device)
+             
+                    updated_subgraph, expilcit_entity_rep = self(dialogue_representation, seed_entity, subgraph,sample_mask,node2nodeId,flag)
+                    updated_subgraphs.append(updated_subgraph)
 
-                
-                updated_subgraphs = []
-
-                dialogue_representation = dialogue_representation.to(self.device) # [1,768]
-                seed_entity = seed_entities.to(self.device)
-                subgraph = subgraph.to(self.device)
-                path = paths.to(self.device)
-                updated_subgraph, expilcit_entity_rep = self(dialogue_representation, seed_entity, subgraph,flag)
-                updated_subgraphs.append(updated_subgraph)
-                instance_loss = _get_instance_path_loss(updated_subgraph, path)
-                one_dialog_loss += instance_loss
-
-            batch_loss.append(one_dialog_loss)
-                
-        batch_loss = torch.stack(batch_loss).sum(-1)/len(batch_data)
+                    instance_loss = _get_instance_path_loss(updated_subgraph, path)
+                    #one_dialog_loss += instance_loss
+                    one_dialog_loss.append(instance_loss)
             
+            # 如果没有进行训练，则暂存一个0，后续删除
+            if len(one_dialog_loss) > 0:
+                one_dialog_loss = torch.stack(one_dialog_loss).sum(-1)
+            else:
+                one_dialog_loss = tensor(0.0).to(self.device)
+            batch_loss.append(one_dialog_loss)
         
+        # 找到不符合要求的数据的索引
+        indices_to_remove = [i for i, loss in enumerate(batch_loss) if loss.item() == 0.0]
+
+        # 如果全部数据都不符合要求，则保留一个值为 0 的张量
+        if len(indices_to_remove) == len(batch_loss):
+            indices_to_remove.pop()
+
+        # 删除不符合要求的数据
+        for index in sorted(indices_to_remove, reverse=True):
+            batch_loss.pop(index)
+
+        # 计算平均损失
+        batch_loss = torch.stack(batch_loss).sum(-1)/len(batch_loss)
+
         if train:
             self.optimizer.zero_grad()
-            batch_loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.parameters(), 5)
-            self.optimizer.step()
+            if batch_loss.item() != 0.0:
+                batch_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.parameters(), 5)
+                self.optimizer.step()
 
-        return batch_loss.item(), updated_subgraphs
+        return batch_loss.item()
     
     def train_model(self, MulitRe_dataset_train):
         self.optimizer.zero_grad()
@@ -137,22 +169,23 @@ class MultiReModel(nn.Module):
             train_loss = 0
             cnt = 0
 
-            
-            dialogID = 1
+            dialogID = 11750
             # 训练阶段
             while dialogID - 1<= MulitRe_dataset_train.train_unseen[1]:
+                print('dialogID',dialogID)
                 batch_data = MulitRe_dataset_train.get_batch_data(dialogID)
                 batch_loss = self.process_batch(batch_data,True)
                 train_loss += batch_loss 
                 cnt += 1
-                dialogID += len(batch_data)
+                dialogID += len(batch_data['datas'])
             
-            train_loss = train_loss/cnt
+            #train_loss = train_loss/cnt
 
             
             cnt = 0
             dev_loss = 0
             while MulitRe_dataset_train.valid_seen[0] <= dialogID - 1 <= MulitRe_dataset_train.valid_unseen[1]:
+                print('dialogID',dialogID)
                 batch_data = MulitRe_dataset_train.get_batch_data(dialogID)
                 batch_loss = self.process_batch(batch_data,False)
                 dev_loss += batch_loss 

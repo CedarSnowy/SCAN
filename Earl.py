@@ -28,48 +28,106 @@ class BiRNNEncoder(nn.Module):
 class Earl(Module):
     def __init__(self,
                  num_embed_units,
-                 relation_embeddings
+                 relation_embeddings,
+                 device
                  ):
-
+        super(Earl,self).__init__()
         #self.sub_hidden = sub_hidden # seed_entity的embedding。维度为[len(seed_entity),num_embed_units]
         # self.triple_num = triple_num    # 采样得到的知识图谱元组数量。
         # self.encoder_batch_size = encoder_batch_size
         self.num_embed_units = num_embed_units 
         self.relation_embeddings = relation_embeddings
+        self.device = device
 
         self.path_cell = GRUCell(num_embed_units,num_embed_units)
 
         self.sub_linear = nn.Linear(num_embed_units,num_embed_units)   # Equation 3
         self.sub_tanh = nn.Tanh()
 
-        self.obj_linear = nn.Linear()   # Equarion 4
+        self.obj_linear = nn.Linear(num_embed_units,num_embed_units)   # Equarion 4
         self.obj_tanh = nn.Tanh()
 
-    def forward(self,graph,encoder_output,sub_hidden,rel_embedding):
-        rels = graph.edata["edge_type"] # tensor形态的关系编号
-        triple_num = len(rels)
+
+    def forward(self,graph,encoder_output,seed_entities,sample_mask,node2nodeId):
+        sub_embeddings = []
+
+        all_rel = graph.edata['edge_type']
+
+        id2embedding = {}
+
+        obj_embeddings = [None] * len(all_rel)
+
+        heads,tails = graph.edges()[0].tolist(),graph.edges()[1].tolist()
+
+        old_ndata = graph.ndata['nodeId']
+
+        # print(seed_entities)
+        # #print(sample_mask)
+        # print('seed',seed_entities)
+        # print('graph.ndata',graph.ndata["nodeId"])
+     
+        # print('graph.edata',graph.edata)
+        # print('graph.edges()',graph.edges())
+        # print('dict',node2nodeId)
+        # print('sample mask',len(sample_mask))
+
+        for i in range(len(seed_entities)):
+            seed = seed_entities[i]
+
+            head_indices = [idx for idx,num in enumerate(heads) if num == seed]
+            #print('indices',head_indices)
+            rels = [graph.edata['edge_type'][idx] for idx in head_indices]
+
+            obj_id = [tails[idx] for idx in head_indices]
+
+            #print('rels',rels)
+
+            triple_num = len(rels)
+            
+            rel_embedding = [self.relation_embeddings[key] for key in rels]
+           
+
+            sub_hidden= sample_mask[i].to(self.device)
+
+            # Equation 3
+            sub_embedding = self.sub_linear(sub_hidden) 
+            sub_embedding = self.sub_tanh(sub_embedding)
+            sub_embedding = sub_embedding.unsqueeze(0)
+
+            # Equation 5
+            r0 = self.path_cell(encoder_output,sub_embedding)
+
+            sub_embeddings.append(sub_embedding.squeeze())
+            id2embedding[int(seed)] = sub_embedding.squeeze()
+
+            idx_rel = 0
+            for j in range(triple_num):
+                # Equation 6
+                rel_embedding[j] = rel_embedding[j].unsqueeze(0).to(self.device)
+                rj = self.path_cell(r0,rel_embedding[j])
+
+                # Equation 4
+                obj_embedding = self.obj_linear(rj)
+                obj_embedding = self.obj_tanh(obj_embedding)
+
+                id2embedding[int(obj_id[idx_rel])] = obj_embedding.squeeze()
+
+                #obj_embeddings[indices[idx_rel]] = obj_embedding.squeeze()
+                idx_rel += 1
         
-        rel_embedding = [self.relation_embeddings[key] for key in rels]
+        #print('id2embedding',id2embedding)
 
-        # Equation 3
-        sub_embedding = self.sub_linear(sub_hidden) #
-        sub_embedding = self.sub_tanh(sub_embedding)
+        new_ndata = []
+        for id in old_ndata:
+            reindex_id = node2nodeId[id]
+            new_ndata.append(id2embedding[reindex_id])
 
-        # Equation 5,6
-        obj_embedding = []
-        r0 = self.path_cell(encoder_output,sub_hidden)
-        for j in range(triple_num):
-            obj_embedding.append(self.path_cell(r0,rel_embedding[j]))
+        # for key,value in node2nodeId.items():
+        #     new_ndata.append(id2embedding[value])
+        new_ndata = torch.stack(new_ndata)
 
+        #print(new_ndata.shape)
 
-        rel_embedding.view(triple_num, self.num_embed_units) # relation的embedding.二维tensor[triple_num,num_embed_units]
-        obj_embedding ,state= self.path_cell(rel_embedding,sub_embedding) # r
-
-        # Equation 4
-        obj_embedding.view(triple_num,self.num_embed_units)
-        obj_embedding = self.obj_linear(obj_embedding)
-        obj_embedding = self.obj_tanh(obj_embedding )
-
-        return sub_embedding,obj_embedding 
+        return new_ndata
 
 

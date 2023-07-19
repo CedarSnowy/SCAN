@@ -1,36 +1,16 @@
-import pandas as pd 
-import numpy as np 
-import functools
-import operator
-from time import time
-import copy
-from collections import defaultdict
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
-from transformers import AlbertTokenizer, AlbertModel
+from torch.utils.data import Dataset,DataLoader
+from utils import load_pickle_file
+from utils import _read_knowledge_graph_dialkg,_make_dgl_graph,_find_entity_path,_find_relation_entity_path
+from collections import defaultdict
 import dgl
 from dgl.sampling import sample_neighbors
-from utils import load_pickle_file, _read_knowledge_graph_dialkg, _make_dgl_graph, _find_relation_entity_path
+from torchvision import transforms
 
-def attnIO_collate(batch): #取数据时进行堆叠
-    dialogue_representations = []
-    seed_entities = []
-    subgraphs = []
-    entity_paths = []
-    for sample in batch:
-        dialogue_representations.append(sample[0])
-        seed_entities.append(sample[1])
-        subgraphs.append(sample[2])
-        entity_paths.append(sample[3])
-
-    return [dialogue_representations, seed_entities, subgraphs, entity_paths]
-
-#dataset里包含[previous_sentence, dialogue_history[:], starting_entities, kg_path]
-class MultiReDataset():
-    def __init__(self, opt):
+class MultiReDataset(Dataset):
+    def __init__(self, opt,transform):
+        self.transform = transform
         self.dataset = load_pickle_file(opt['dialog_samples'])
-        
         self.kg_seen = load_pickle_file(opt['kg_seen'])
         self.kg_unseen = load_pickle_file(opt['kg_unseen'])
 
@@ -49,79 +29,44 @@ class MultiReDataset():
         self.n_max = opt['n_max']
         self.batch = opt['batch']
 
-        # 划分数据集
-        seen_percentage = opt['seen_percentage']
-        train,valid,test_seen,test_unseen = 10583,1200,600,600
-        self.train_seen = [0,int(train * seen_percentage)-1]
-        self.train_unseen = [int(train * seen_percentage) ,10583 -1]
-        self.valid_seen = [10583,10583+int(valid * seen_percentage)-1]
-        self.valid_unseen = [10583+int(valid * seen_percentage),12983 - 1200]
 
-        self.graph_seen,self.graph_unseen = self.get_graph()
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        if self.transform:
+            dialog_samples = self.dataset[idx]
+            dialogID = dialog_samples['dialogID']
+            samples_flag = dialog_samples['samples_flag']
+            flag = samples_flag['flag']
+            samples = samples_flag['samples']
+
+        return dialogID,samples,flag
 
 
-    def get_graph(self):
-        kg_seen = copy.deepcopy(self.kg_seen)
-        kg_unseen = copy.deepcopy(self.kg_unseen)
-        entity2entityID_seen = copy.deepcopy(self.entity2entityID_seen)
-        entity2entityID_unseen = copy.deepcopy(self.entity2entityID_unseen)
-        relation2relationID = copy.deepcopy(self.relation2relationID)
+class ToTensor(object):
 
-        head_list,tail_list,rel_list = [],[],[]
-        for key,value in kg_seen.items():
-            head = entity2entityID_seen[key]
-            for triple in value:
-                rel = relation2relationID[triple[1][:-4]]
-                tail = entity2entityID_seen[triple[2]]
-                head_list.append(head)
-                tail_list.append(tail)
-                rel_list.append(rel)
-            
-    
-        graph_seen = _make_dgl_graph(head_list,tail_list,rel_list)
+    def __init__(self, opt):
+        self.kg_seen = load_pickle_file(opt['kg_seen'])
+        self.kg_unseen = load_pickle_file(opt['kg_unseen'])
 
-        head_list,tail_list,rel_list = [],[],[]
-        for key,value in kg_unseen.items():
-            head = entity2entityID_unseen[key]
-            for triple in value:
-                rel = relation2relationID[triple[1][:-4]]
-                tail = entity2entityID_unseen[triple[2]]
-                head_list.append(head)
-                tail_list.append(tail)
-                rel_list.append(rel)
+        self.entity2entityID_seen = load_pickle_file(opt['entity2entityID_seen'])
 
-        graph_unseen = _make_dgl_graph(head_list,tail_list,rel_list)
+        self.entity2entityID_unseen = load_pickle_file(opt['entity2entityID_unseen'])
 
-        return graph_seen,graph_unseen
+        self.relation2relationID = load_pickle_file(opt['relation2relationID'])
 
-    def get_batch_data(self,start_index,state = 'train'):
-        datas = []
-        last_flag = 1
-        for i in range(self.batch):
-            samples_flag = self.dataset[start_index]
-            samples,flag = samples_flag['samples'],samples_flag['flag']
-            if i == 0:
-                last_flag = flag
-            else:
-                if flag != last_flag:
-                    break
-                last_flag = flag
+        self.entity_embeddings_seen = load_pickle_file(opt["entity_embeddings_seen"])
+  
+        self.entity_embeddings_unseen = load_pickle_file(opt["entity_embeddings_unseen"])
+        self.relation_embeddings = load_pickle_file(opt["relation_embeddings"])
+        self.self_loop_id = self.relation2relationID["self loop"]
+        self.n_hop = opt['n_hop']
+        self.n_max = opt['n_max']
+        self.batch = opt['batch']
+   
 
-            if start_index - 1 >= 12983 - 600:
-                state = 'test'
-             
-            data = []
-
-            for sample in samples:
-                data.append(self.toTensor(sample,flag,state = state))
-            
-            datas.append(data)
-            start_index += 1
-        
-        return {'flag':last_flag,'datas':datas}
-
-    
-    def toTensor(self,sample,flag,state):
+    def __call__(self, sample,flag,state):
         encoder_utterances = sample['utterances']
         if flag == 1:
             startEntities = sample['seeds']
@@ -254,6 +199,25 @@ class MultiReDataset():
             return [dialogue_representation, seed_entities, subgraph, entity_paths]
         else:
             return [dialogue_representation, seed_entities, subgraph, entity_paths, sample['MASK embedding'],node2nodeId]
+        
+
+batch_size = 4
+data_directory = './dataset/'
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+opt_dataset_train = {
+                    "entity2entityID_seen": data_directory+"entity2entityID_seen.pkl", 
+                    "entity2entityID_unseen": data_directory+"entity2entityID_unseen.pkl", 
+                    "relation2relationID": data_directory+"relation2relationID.pkl",
+                    "entity_embeddings_seen": data_directory+"entity_embeddings_seen.pkl",
+                    "entity_embeddings_unseen": data_directory+"entity_embeddings_unseen.pkl", 
+                    "relation_embeddings": data_directory+"relation_embeddings.pkl",
+                    "dialog_samples": data_directory + "dialog_samples_list.pkl", 
+                    "knowledge_graph": data_directory+"opendialkg_triples.txt",
+                    'kg_seen':data_directory+'kg_seen.pkl',
+                    'kg_unseen':data_directory+'kg_unseen.pkl',
+                    "device": device,
+                    "n_hop": 1, "n_max": 20, "max_dialogue_history": 3,'batch':batch_size,'seen_percentage':0.8}
 
 
-
+data = MultiReDataset(opt=opt_dataset_train,transform=transforms.Compose([ToTensor(opt_dataset_train)]))
+print(data[0])

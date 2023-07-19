@@ -205,17 +205,25 @@ class AttnIO(nn.Module):
 
     #调用这里
     #传一个embedding的list
-    def forward(self, graph, seed_set, dialogue_context):
-        rels = graph.edata["edge_type"] # tensor形态的关系编号
-        feat_rels = self.fcr(self.relation_embeddings.weight) 
-        
-        feat = self.entity_embeddings(graph.ndata["nodeId"]) # 得到对应节点的embedding
-       
-        #看一下feat是什么
-        #print(feat.shape)
-        #print(len(feat))
+    def forward(self, graph, seed_set, dialogue_context,unseen_embeddings = None,flag = 1):
 
+        if flag == 0:
+            feat = unseen_embeddings
+            # feat_rel = torch.stack(obj_embeddings)
+            # feat_rel = self.fcr(feat_rel)
+        else:
+            # 得到对应节点的embedding
+            feat = self.entity_embeddings(graph.ndata["nodeId"]) 
+
+        # 得到关系的embedding
+        feat_rels = self.fcr(self.relation_embeddings.weight) 
+        rels = graph.edata["edge_type"] # tensor形态的关系编号
+        rels = graph.edata['edge_type']
         feat_rel = feat_rels[rels]
+    
+        #print('feat shape',feat.shape,'fear_rel shape',feat_rel.shape)
+
+        
         feat = self.fce(feat)
         
         context = torch.matmul(dialogue_context, self.out_w_init) # [1,768] × [in_feats,out_feats]
@@ -224,6 +232,8 @@ class AttnIO(nn.Module):
         conversation_seedset_attention[seed_set] += 10000
         conversation_seedset_attention -= 10000
         conversation_seedset_attention = softmax(conversation_seedset_attention)
+
+        #print('conversation',conversation_seedset_attention)
     
         graph.ndata.update({"a_0": conversation_seedset_attention})
 

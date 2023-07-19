@@ -23,17 +23,20 @@ tokenizer = AlbertTokenizer.from_pretrained("albert-base-v2", cache_dir="/root/a
 model = AlbertModel.from_pretrained("albert-base-v2", cache_dir="/root/autodl-tmp/cache")
 encoder = AlbertModel.from_pretrained('albert-base-v2',cache_dir="/root/autodl-tmp/cache")
 
-def get_albert_word_representations(sentence):
+def get_albert_word_representations(sentence_list):
+    sentence = ''
+    for sen in sentence_list:
+        sentence += sen + ' '
     sentence_tokenized = tokenizer.tokenize(sentence)  # 对句子进行分词
+
+    last_sentence = sentence_list[-1]
+    mask_count = last_sentence.count("[MASK]")
+
+    mask_indices = [index for index, element in enumerate(sentence_tokenized) if element == '[MASK]'][-mask_count:]
+
+    mask_indices = mask_indices[-mask_count:]
+
     sentence_ids = tokenizer.convert_tokens_to_ids(sentence_tokenized)  # 将分词转换为对应的词id
-
-    # # 选择要mask的单词索引
-    # word_indices_to_mask = [1, 3]  # 示例：将第2个和第4个单词进行mask
-
-    # # 将选择的单词替换为[MASK]标记
-    # for index in word_indices_to_mask:
-    #     input_ids[index] = tokenizer.mask_token_id
-
 
     # 添加特殊标记和生成批处理张量
     input_ids = [tokenizer.cls_token_id] + sentence_ids + [tokenizer.sep_token_id]
@@ -46,7 +49,32 @@ def get_albert_word_representations(sentence):
     word_embeddings = outputs.last_hidden_state.squeeze(0)  # 获取最后一层的隐藏状态
     word_representations = word_embeddings[1:-1]  # 去除特殊标记并保留每个单词的编码
     
-    return word_representations
+    return word_representations,mask_indices
+
+# def get_albert_word_representations(sentence):
+#     sentence_tokenized = tokenizer.tokenize(sentence)  # 对句子进行分词
+#     sentence_ids = tokenizer.convert_tokens_to_ids(sentence_tokenized)  # 将分词转换为对应的词id
+
+#     # # 选择要mask的单词索引
+#     # word_indices_to_mask = [1, 3]  # 示例：将第2个和第4个单词进行mask
+
+#     # # 将选择的单词替换为[MASK]标记
+#     # for index in word_indices_to_mask:
+#     #     input_ids[index] = tokenizer.mask_token_id
+
+
+#     # 添加特殊标记和生成批处理张量
+#     input_ids = [tokenizer.cls_token_id] + sentence_ids + [tokenizer.sep_token_id]
+#     inputs = torch.tensor(input_ids).unsqueeze(0)  # 添加批处理维度
+
+#     with torch.no_grad():
+#         outputs = model(inputs)  # 获取ALBERT模型的输出
+    
+
+#     word_embeddings = outputs.last_hidden_state.squeeze(0)  # 获取最后一层的隐藏状态
+#     word_representations = word_embeddings[1:-1]  # 去除特殊标记并保留每个单词的编码
+    
+#     return word_representations
 
 def get_albert_representations(sentence):
     sentence_tokenized = tokenizer(sentence, return_tensors="pt")
@@ -118,5 +146,8 @@ def get_albert_representations(sentence):
 # print(encoded_sentence.shape)
 # print(encoded_sentence)
 
-sentence,word = get_albert_representations('Do you know of any books similar to Wonder? That was an amazing book!  Some other books like it include The Last Mile and The Dream of Thieves. Was the Last Mile made into a movie and if so when was it released?')
-print(sentence.shape,word.shape)
+utterance = ['Hello [MASK],hello [MASK]']
+encoder_output, mask_indices = get_albert_word_representations(utterance)
+mask_embeddings = [encoder_output[mask] for mask in mask_indices]
+print(torch.stack(mask_embeddings).shape)
+

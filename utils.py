@@ -7,6 +7,7 @@ import torch
 def load_pickle_file(location):
     with open(location, "rb") as f:
         pickle_variable = pickle.load(f)
+    print(location,len(pickle_variable))
     return pickle_variable
 
 def _read_knowledge_graph_KBRD(kg_file, entity2entityId, relation2relationId, isDict = False):
