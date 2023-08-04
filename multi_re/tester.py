@@ -1,6 +1,8 @@
 from __future__ import print_function, division
 import sys
 import os
+from sklearn.metrics import precision_score, recall_score, f1_score,accuracy_score
+import numpy as np
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
@@ -88,8 +90,7 @@ def relation_accuracy(new_relation_path_pool, new_probs_pool, true_relation_path
     recall_relation["counts"] += 1
 
 
-def batch_beam_search(model, batch_data, device, topk,recall_entity,recall_path):
-    test_count = 0
+def batch_beam_search(model, batch_data, device, topk,recall_entity,recall_path,predict_entity_list,true_entity_list):
     with torch.no_grad():
         model.eval()
         # 读取数据
@@ -108,7 +109,6 @@ def batch_beam_search(model, batch_data, device, topk,recall_entity,recall_path)
                 elif (state == 'test' and flag == 0) and len(sample_mask) == 0:
                     continue
                 else:
-                    test_count += 1
                     dialogue_representation = dialogue_representation.to(device) # [1,768]
                     seed_entity = seed_entities.to(device)
                     subgraph = subgraph.to(device)
@@ -125,7 +125,7 @@ def batch_beam_search(model, batch_data, device, topk,recall_entity,recall_path)
                         # 两跳内实体
                         if hop==0:
                             #print('seed',seed_entities)
-                            k = min(topk[hop], len(seed_entities))
+                            k = min(topk[0], len(seed_entities))
 
                             probs = updated_subgraph.ndata["a_0"].to("cpu")
                             #print('probs',probs)
@@ -181,8 +181,13 @@ def batch_beam_search(model, batch_data, device, topk,recall_entity,recall_path)
                     probs_pool , path_pool = probs_relation_entity[0], probs_relation_entity[1]
                     #print('path_pool',path_pool,'probs_pool',probs_pool,'path',path,'edge',edges)
                     calculate_metrics(path_pool ,true_path.tolist(), edges,recall_entity,recall_path)
-                    p=10
-    return test_count
+
+                    filtered_paths = filter_paths(path_pool)
+                    pred_entity = filtered_paths[0][-1]
+
+                    predict_entity_list.append(pred_entity)
+                    true_entity_list.append(true_path.tolist()[-1])
+
 
 def predict_paths(policy_file, ConvKGDatasetLoaderTest, opt):
     print('Predicting paths...')
@@ -204,14 +209,14 @@ def predict_paths(policy_file, ConvKGDatasetLoaderTest, opt):
 
     with torch.no_grad():
         for ks in K:
-            test_count = 0
+            predict_entity_list,true_entity_list = [],[]
             for batch in tqdm(ConvKGDatasetLoaderTest):
                 # i+=1
                 # if i==500:
                 #     break
                 
-                test_count += batch_beam_search(model, batch, opt["device"],  ks,recall_entity,recall_path)
-            print('test count',test_count)
+                batch_beam_search(model, batch, opt["device"], ks,recall_entity,recall_path,predict_entity_list,true_entity_list)
+
             
             for k, v in recall_entity.items():
                 if "@" in k:
@@ -226,6 +231,24 @@ def predict_paths(policy_file, ConvKGDatasetLoaderTest, opt):
             #         recall_relation[k] /= recall_relation["counts"]
 
             #print(ks)
+                # 计算每个样本的预测是否成功
+           
+            # 计算准确率
+            precision = accuracy_score(true_entity_list, predict_entity_list)
+
+            # 计算召回率
+            recall_macro = recall_score(true_entity_list, predict_entity_list, average='macro')  # 设置average参数为'macro'，计算宏平均召回率
+
+            # 计算F1得分
+            f1_macro = f1_score(true_entity_list, predict_entity_list, average='macro')  # 设置average参数为'macro'，计算宏平均F1得分
+
+            # 计算召回率
+            recall_micro = recall_score(true_entity_list, predict_entity_list, average='micro')  # 设置average参数为'macro'，计算宏平均召回率
+
+            # 计算F1得分
+            f1_micro = f1_score(true_entity_list, predict_entity_list, average='micro')  # 设置average参数为'macro'，计算宏平均F1得分
+
+            
             path_res = str(recall_path["counts@1"]*100) + "\t" + str(recall_path["counts@3"]*100) + "\t" + str(recall_path["counts@5"]*100) + "\t" + str(recall_path["counts@10"]*100) + "\t" + str(recall_path["counts@25"]*100) + "\t" + str(recall_path["counts"])
             entity_res = str(recall_entity["counts@1"]*100) + "\t" + str(recall_entity["counts@3"]*100) + "\t" + str(recall_entity["counts@5"]*100) + "\t" + str(recall_entity["counts@10"]*100) + "\t" + str(recall_entity["counts@25"]*100) + "\t" + str(recall_entity["counts"])
             path_res = "\t".join([f"{round(recall_path['counts@1']*100, 2)}", f"{round(recall_path['counts@3']*100, 2)}", f"{round(recall_path['counts@5']*100, 2)}", f"{round(recall_path['counts@10']*100, 2)}", f"{round(recall_path['counts@25']*100, 2)}", str(recall_path['counts'])])
@@ -244,13 +267,14 @@ def predict_paths(policy_file, ConvKGDatasetLoaderTest, opt):
                                      str(recall_entity['counts'])])
             print('path_res',path_res)
             print('entity_res',entity_res)
+            print('precision:',precision,'recall_macro:',recall_macro,'f1_macro:',f1_macro,'recall_micro:',recall_micro,'f1_micro:',f1_micro)
 
             for k in recall_entity.keys():
                 recall_entity[k] = 0
             for k in recall_path.keys():
                 recall_path[k] = 0
         
-    return path_res,entity_res
+    return path_res,entity_res,precision,recall_macro,f1_macro,recall_micro,f1_micro
 
 if __name__ == '__main__':
 
@@ -306,32 +330,34 @@ if __name__ == '__main__':
     test_seen_dataloader = DataLoader(test_seen_data, batch_size=batch_size,collate_fn=MultiRe_collate)
     test_unseen_dataloader = DataLoader(test_unseen_data, batch_size=batch_size,collate_fn=MultiRe_collate)
 
-    result_file = './result/result.csv'
-    fieldnames = ["model_path", "test_type", "path_res", "entity_res"]
+    result_file = './result/MultiRe_coref_dense.csv'
+
+
+    fieldnames = ["model_path", "test_type", "path_res", "entity_res",'precision','recall_macro','f1_macro','recall_micro','f1_micro']
 
     with open(result_file, mode="w", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(fieldnames)
 
     for i in range(2,22,2):
-        model_path = f'./models/batch-4_nhop-2_nmax-100/'
+        model_path = f'./models/coref_dense/batch-4_nhop-2_nmax-100/'
         model_name = f'MultiRe_epoch-{i}'
         model_path += model_name
 
         print(model_path)
         print('test seen')
-        path_res_seen,entity_res_seen = predict_paths(model_path, test_seen_dataloader, opt_model)
+        path_res_seen,entity_res_seen,precision,recall_macro,f1_macro,recall_micro,f1_micro = predict_paths(model_path, test_seen_dataloader, opt_model)
 
         with open(result_file, mode="a", newline="") as file:
             writer = csv.writer(file)
-            writer.writerow([model_name, "seen", path_res_seen, entity_res_seen])
+            writer.writerow([model_name, "seen", path_res_seen, entity_res_seen,precision,recall_macro,f1_macro,recall_micro,f1_micro])
 
         print('test unseen')
-        path_res_unseen,entity_res_unseen = predict_paths(model_path, test_unseen_dataloader, opt_model)
+        path_res_unseen,entity_res_unseen,precision,recall_macro,f1_macro,recall_micro,f1_micro = predict_paths(model_path, test_unseen_dataloader, opt_model)
 
         with open(result_file, mode="a", newline="") as file:
             writer = csv.writer(file)
-            writer.writerow([model_name, "unseen", path_res_unseen, entity_res_unseen])
+            writer.writerow([model_name, "unseen", path_res_unseen, entity_res_unseen,precision,recall_macro,f1_macro,recall_micro,f1_micro])
 
 
 

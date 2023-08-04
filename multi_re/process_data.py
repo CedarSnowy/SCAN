@@ -146,8 +146,29 @@ def get_albert_representations(sentence):
 # print(encoded_sentence.shape)
 # print(encoded_sentence)
 
-utterance = ['Hello [MASK],hello [MASK]']
+start_entity= ['world']
+
+masked_sentence = ['Hello WOrld','hello world']
+# masked_sentence = ' '.join(masked_sentence)
+
+
+for phrase in start_entity:
+    for idx,sen in enumerate(masked_sentence):
+        pattern = r"\b" + re.escape(phrase) + r"\b"  # 使用正则表达式匹配整个单词
+        masked_sentence[idx] = re.sub(pattern, "[MASK]", sen, flags=re.IGNORECASE)
+
+print(masked_sentence)
+
+
 encoder_output, mask_indices = get_albert_word_representations(utterance)
 mask_embeddings = [encoder_output[mask] for mask in mask_indices]
-print(torch.stack(mask_embeddings).shape)
 
+print(mask_embeddings)
+
+# 将列表中的张量堆叠起来，创建一个新的维度作为堆叠的维度
+stacked_tensor = torch.stack(mask_embeddings)
+
+# 沿着堆叠的维度求平均值
+average_tensor = torch.mean(stacked_tensor, dim=0)
+
+print(average_tensor)

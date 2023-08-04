@@ -241,7 +241,9 @@ def index_and_embedding_relation(file):
 
 def process_dialog(file,seen_percentage,max_history_num):
     # 读取data.json，跳过第一行
-    lines = read_json_file_skip_first_line(file)
+    #lines = read_json_file_skip_first_line(file)
+    with open(file_path, "r") as file:
+        lines = file.readlines()  # 从第二行开始读取
 
     # 划分数据集
     train,valid,test_seen,test_unseen = 10583,1200,600,600
@@ -252,66 +254,6 @@ def process_dialog(file,seen_percentage,max_history_num):
     test_seen = [12983 - 1200,12983 - 600 -1 ]
     test_unseen = [12983 - 600,12983]
     print('train_seen,train_unseen,valid_seen,valid_unseen,test_seen,test_unseen',train_seen,train_unseen,valid_seen,valid_unseen,test_seen,test_unseen)
-
-    # 处理unseen部分
-    # for i,line in enumerate(lines):
-    #     if train_unseen[0] <= i <= train_unseen[1] or valid_unseen[0] <= i <= valid_unseen[1] or test_unseen[0] <= i:
-    #         line = json.loads(line)
-    #         dialogs = line['dialog']
-    #         mask_entity = {}
-    #         for j in range(len(dialogs)): 
-    #             dialog = dialogs[j]
-    #             context,path = dialog[0],dialog[1]             
-    #             path_num = len(path)
-    #             if path_num > 0:
-    #                 # 记录出现过的entity
-    #                 existing_entity = []
-    #                 for k in range(path_num):
-    #                     existing_entity.append(path[k][0]) # head出现
-    #                     # existing_entity.append(path[k][2]) # tail出现
-    #                 existing_entity = list(set(existing_entity))
-                    
-    #                 # 将原先句子中出现的entity替换为MASK，并且记录
-    #                 masked_sentence = context
-    #                 masked_indices = []
-
-    #                 # 遍历词组列表中的每个词组
-    #                 for phrase in existing_entity:
-    #                     phrase_pos = masked_sentence.lower().find(phrase.lower())  # 查找词组在句子中的位置
-    #                     if phrase_pos != -1:
-    #                         masked_sentence = masked_sentence[:phrase_pos] + "[MASK]" + masked_sentence[phrase_pos+len(phrase):]
-    #                         masked_indices.append((phrase_pos, phrase_pos+len(phrase)))
-    #                         # lowercase_phrase = masked_sentence[phrase_pos:phrase_pos+len(phrase)].lower()
-    #                         # masked_sentence = masked_sentence[:phrase_pos] + "[MASK]" + masked_sentence[phrase_pos+len(phrase):]
-    #                         # masked_indices.append((phrase_pos, phrase_pos+len(phrase), lowercase_phrase))
-
-    #                 # 获取每个 MASK 原先对应的实体
-    #                 original_entity = []
-    #                 # for pos in masked_indices:
-    #                 #     original_entity.append(context[pos[0]:pos[1]])
-    #                 for pos in masked_indices:
-    #                     original_entity_phrase = context[pos[0]:pos[1]]
-    #                     for entity in existing_entity:
-    #                         if original_entity_phrase.lower() == entity.lower():
-    #                             if entity.islower():
-    #                                 original_entity.append(original_entity_phrase.lower())
-    #                             elif entity.isupper():
-    #                                 original_entity.append(original_entity_phrase.upper())
-    #                             elif entity.istitle():
-    #                                 original_entity.append(original_entity_phrase.title())
-    #                             else:
-    #                                 original_entity.append(original_entity_phrase)
-    #                             break
-
-
-    #                 dialog[0] = masked_sentence
-    #                 dialog.append(original_entity[::-1])
-    #                 dialogs[j] = dialog
-
-    #         # 写回lines
-    #         line['dialog'] = dialogs
-    #         lines[i] = json.dumps(line)
-
 
     # 处理每次对话
     dialogID = 1

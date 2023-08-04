@@ -5,6 +5,7 @@ from MulitRe_build import MultiReModel
 from torch.utils.data import DataLoader,Subset
 import os
 from dataset_MR import MultiReDataset,ToTensor,MultiRe_collate
+#from dataset_dense import MultiReDataset,ToTensor,MultiRe_collate
 from torchvision import transforms
 
 if __name__ == '__main__':
@@ -13,7 +14,7 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 4
     n_hop = 2
-    n_max = 100
+    n_max = -1
     save_path = f'./models/coref/batch-{batch_size}_nhop-{n_hop}_nmax-{n_max}/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)

@@ -204,4 +204,7 @@ class MultiReModel(nn.Module):
             ins+=1
             if (epoch+1)%2==0:
                 torch.save(self.state_dict(), f'{self.model_directory}{self.model_name}_epoch-{epoch+1}')
+            
+            if epoch == 4 or epoch == 9 or epoch ==14:
+                self.lr *= self.lr_reduction_factor
 
