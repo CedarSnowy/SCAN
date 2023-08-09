@@ -137,6 +137,8 @@ def save_kg(file_path):
 
     seen_entity = [key for key in kg_seen.keys()]
 
+    all_entity = [key for key in kg_whole.keys()]
+
 
     seen_item_count = sum(len(lst) for lst in kg_seen.values())
 
@@ -155,7 +157,40 @@ def save_kg(file_path):
     with open(save_path +"kg_unseen.pkl", "wb") as file:
         pickle.dump(kg_unseen, file)
 
-    return seen_entity, unseen_entity
+    return seen_entity, unseen_entity,all_entity
+
+
+def index_and_embedding_all_entity(all_entity):
+    # 尝试把所有实体都纳入到一个KG里面
+    idx = 1
+
+    entity2entityID_all = defaultdict(int)
+
+    for i in range(len(all_entity)):
+        entity = all_entity[i]
+        entity2entityID_all[entity] = idx
+        idx += 1
+
+    entityID2entity_all = {v:k for k,v in entity2entityID_all.items()}
+
+    with open(save_path +"entity2entityID_all.pkl", "wb") as file:
+        print(f'save{file}')
+        pickle.dump(entity2entityID_all, file)
+
+    with open(save_path +"entityID2entity_all.pkl", "wb") as file:
+        pickle.dump(entityID2entity_all, file)
+
+
+    entity_embeddings_all = []
+    for entityId in tqdm(sorted(entityID2entity_all.keys())):
+        entity_embeddings_all.append(get_albert_representations(entityID2entity_all[entityId]))
+    entity_embeddings_all = [torch.zeros(768, dtype=torch.float32)] + entity_embeddings_all
+
+    entity_embeddings_all = torch.stack(entity_embeddings_all)
+
+    with open(save_path +"entity_embeddings_all.pkl", "wb") as file:
+        pickle.dump(entity_embeddings_all, file)
+
 
 
 def index_and_embedding_entity(seen_entity, unseen_entity):
@@ -201,7 +236,6 @@ def index_and_embedding_entity(seen_entity, unseen_entity):
         entity_embeddings_seen.append(get_albert_representations(entityID2entity_seen[entityId]))
     entity_embeddings_seen = [torch.zeros(768, dtype=torch.float32)] + entity_embeddings_seen
 
-    print(len(entity_embeddings_seen))
 
     entity_embeddings_seen = torch.stack(entity_embeddings_seen)
 
@@ -482,8 +516,9 @@ def multi_apperance(dialog_samples):
 
 if __name__ == "__main__":
 
-    # seen_entity, unseen_entity = save_kg(data_path + 'data.json')
-    # #get_valid_flag(file_path,unseen_entity)
+    seen_entity, unseen_entity,all_entity = save_kg(data_path + 'data.json')
+
+    index_and_embedding_all_entity(all_entity)
 
     # index_and_embedding_entity(seen_entity, unseen_entity)
 
@@ -496,8 +531,8 @@ if __name__ == "__main__":
    
     #encoder_dialog(mulit_apper_list)
 
-    dialog_samples_list = load_pickle_file('./dataset/dialog_samples_list.pkl')
+    # dialog_samples_list = load_pickle_file('./dataset/dialog_samples_list.pkl')
 
-    multi_apperance(dialog_samples_list)
+    # multi_apperance(dialog_samples_list)
 
  

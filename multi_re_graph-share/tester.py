@@ -23,7 +23,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from tensorboardX import SummaryWriter
 
-from dataset_new import MultiReDataset,ToTensor,MultiRe_collate
+
 from MulitRe_build import MultiReModel
 from torch.utils.data import Subset
 from dgl.sampling import sample_neighbors
@@ -309,6 +309,11 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 1
 
+    sample_method = 'normal'
+
+    if sample_method == 'normal':
+        from dataset_new import MultiReDataset,ToTensor,MultiRe_collate
+
     # 
     opt_dataset = {
                     "entity2entityID_seen": data_directory+"entity2entityID_seen.pkl", 
@@ -375,7 +380,7 @@ if __name__ == '__main__':
 
     test_multi_apper_dataloader = DataLoader(multi_apper_data,batch_size=batch_size,collate_fn=MultiRe_collate)
 
-    result_file = './result/MultiRe_early-stop_no-subgraph-share.csv'
+    result_file = './result/MultiRe_early-stop_share-subgraph.csv'
 
 
     fieldnames = ["model_path", "test_type", "path_res", "entity_res",'precision','recall_macro','f1_macro','recall_micro','f1_micro']
@@ -385,7 +390,7 @@ if __name__ == '__main__':
         writer.writerow(fieldnames)
 
     for i in range(2,22,2):
-        model_path = f'./models/coref_early-stop/batch-4_nhop-2_nmax-100/'
+        model_path = f'./models/coref_early-stop_share-subgraph/batch-4_nhop-2_nmax-100/'
         model_name = f'MultiRe_epoch-{i}'
         model_path += model_name
 

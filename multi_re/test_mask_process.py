@@ -24,13 +24,11 @@ model = AlbertModel.from_pretrained("albert-base-v2", cache_dir="/root/autodl-tm
 encoder = AlbertModel.from_pretrained('albert-base-v2',cache_dir="/root/autodl-tmp/cache")
 
 def get_albert_word_representations(sentence_list):
-    sentence = ''
-    for sen in sentence_list:
-        sentence += sen + ' '
+    sentence = ' '.join(sentence_list)
+
     sentence_tokenized = tokenizer.tokenize(sentence)  # 对句子进行分词
 
-    last_sentence = sentence_list[-1]
-    mask_count = last_sentence.count("[MASK]")
+    mask_count = sentence.count("[MASK]")
 
     mask_indices = [index for index, element in enumerate(sentence_tokenized) if element == '[MASK]'][-mask_count:]
 
@@ -148,7 +146,7 @@ def get_albert_representations(sentence):
 
 start_entity= ['world']
 
-masked_sentence = ['Hello WOrld','hello world']
+masked_sentence = ['Hello WOrld','hello world','ffasf world']
 # masked_sentence = ' '.join(masked_sentence)
 
 
@@ -159,11 +157,10 @@ for phrase in start_entity:
 
 print(masked_sentence)
 
-
-encoder_output, mask_indices = get_albert_word_representations(utterance)
+encoder_output, mask_indices = get_albert_word_representations(masked_sentence)
 mask_embeddings = [encoder_output[mask] for mask in mask_indices]
 
-print(mask_embeddings)
+print(len(mask_embeddings))
 
 # 将列表中的张量堆叠起来，创建一个新的维度作为堆叠的维度
 stacked_tensor = torch.stack(mask_embeddings)

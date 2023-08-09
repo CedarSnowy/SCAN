@@ -23,18 +23,32 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from tensorboardX import SummaryWriter
 
-from dataset_MR import MultiReDataset,ToTensor,MultiRe_collate
+
 from MulitRe_build import MultiReModel
+from dataset_dense import ToTensor,MultiRe_collate,MultiReDataset
 from torch.utils.data import Subset
 from dgl.sampling import sample_neighbors
+from utils import load_pickle_file
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+entityID2entity_seen = load_pickle_file('./dataset/entityID2entity_seen.pkl')
+entityID2entity_unseen = load_pickle_file('./dataset/entityID2entity_unseen.pkl')
+
+def path2node(path,seen):
+    start = path[0]
+    middle = path[1]
+    tail = path[2]
+
+    try:
+        if seen:
+            print(f'{entityID2entity_seen[start]} --> {entityID2entity_seen[middle]} --> {entityID2entity_seen[tail]}')
+        else:
+            print(f'{entityID2entity_unseen[start]} --> {entityID2entity_unseen[middle]} --> {entityID2entity_unseen[tail]}')
+    except:
+        pass
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-device=torch.device("cuda")
 
 def filter_paths(paths):
     last_entities = set()
@@ -90,33 +104,34 @@ def relation_accuracy(new_relation_path_pool, new_probs_pool, true_relation_path
     recall_relation["counts"] += 1
 
 
-def batch_beam_search(model, batch_data, device, topk,recall_entity,recall_path,predict_entity_list,true_entity_list):
+def batch_beam_search(model, batch_data, device, topk,recall_entity,recall_path,predict_entity_list,true_entity_list,seen):
     with torch.no_grad():
         model.eval()
         # 读取数据
         for one_batch_data in batch_data:
-
-            # flag,sample_num = one_batch_data[6],one_batch_data[7]
-            flag,state,sample_num = one_batch_data[7],one_batch_data[8],one_batch_data[9]
+            flag,state,sample_num = one_batch_data[9],one_batch_data[10],one_batch_data[11]
 
             for i in range(sample_num):
+                last_graph = None if i == 0 else last_graph
+                last_entity_rep = None if i == 0 else last_entity_rep
 
-                dialogue_representation, seed_entities, subgraph, paths,sample_mask,node2nodeID,startEntity_in_seenKG  = one_batch_data[0][i],one_batch_data[1][i],one_batch_data[2][i],one_batch_data[3][i],one_batch_data[4][i],one_batch_data[5][i],one_batch_data[6][i]
-                # dialogue_representation, seed_entities, subgraph, paths,sample_mask,node2nodeID = one_batch_data[0][i],one_batch_data[1][i],one_batch_data[2][i],one_batch_data[3][i],one_batch_data[4][i],one_batch_data[5][i]
+                dialogue_representation, seed_entities, subgraph, paths, sub_embedding ,node2nodeID, nodeID2node,entity_state,startEntity_in_seenKG = one_batch_data[0][i],one_batch_data[1][i],one_batch_data[2][i],one_batch_data[3][i],one_batch_data[4][i],one_batch_data[5][i],one_batch_data[6][i],one_batch_data[7][i],one_batch_data[8][i]
 
                 if len(seed_entities) == 0:
                     continue
-                elif (state == 'test' and flag == 0) and len(sample_mask) == 0:
+                elif (state == 'test' and flag == 0) and len(sub_embedding) == 0:
                     continue
                 else:
                     dialogue_representation = dialogue_representation.to(device) # [1,768]
-                    seed_entity = seed_entities.to(device)
+                    seed_entities = seed_entities.to(device)
                     subgraph = subgraph.to(device)
                     true_path = paths.to(device)
              
-                    updated_subgraph, expilcit_entity_rep = model(dialogue_representation, seed_entity, subgraph,sample_mask,node2nodeID,flag,state,startEntity_in_seenKG)
-    
+                    updated_subgraph, expilcit_entity_rep = model(dialogue_representation, seed_entities, subgraph, sub_embedding, node2nodeID, nodeID2node, flag, state,startEntity_in_seenKG, last_graph, last_entity_rep, entity_state)
+
                     edges = updated_subgraph.edges()
+
+                    last_graph,last_entity_rep = updated_subgraph,expilcit_entity_rep 
         
                     path_pool = []  # list of list, size=bs
                     probs_pool = []
@@ -188,8 +203,17 @@ def batch_beam_search(model, batch_data, device, topk,recall_entity,recall_path,
                     predict_entity_list.append(pred_entity)
                     true_entity_list.append(true_path.tolist()[-1])
 
+                    # print('true:')
+                    # path2node(true_path.tolist(),seen)
+                    # print('pred:')
+                    # for idx,path in enumerate(path_pool):
+                    #     path2node(path,seen)
+                    #     if idx == 10:
+                    #         break
+                    # print()
 
-def predict_paths(policy_file, ConvKGDatasetLoaderTest, opt):
+
+def predict_paths(policy_file, ConvKGDatasetLoaderTest, opt,seen):
     print('Predicting paths...')
     pretrain_sd = torch.load(policy_file)
     model = MultiReModel(opt).to(opt["device"])
@@ -215,7 +239,7 @@ def predict_paths(policy_file, ConvKGDatasetLoaderTest, opt):
                 # if i==500:
                 #     break
                 
-                batch_beam_search(model, batch, opt["device"], ks,recall_entity,recall_path,predict_entity_list,true_entity_list)
+                batch_beam_search(model, batch, opt["device"], ks,recall_entity,recall_path,predict_entity_list,true_entity_list,seen)
 
             
             for k, v in recall_entity.items():
@@ -283,6 +307,9 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 1
 
+    sample_method = 'normal'
+
+
     # 
     opt_dataset = {
                     "entity2entityID_seen": data_directory+"entity2entityID_seen.pkl", 
@@ -299,6 +326,23 @@ if __name__ == '__main__':
                     "n_hop": 2, "n_max": 100, "max_dialogue_history": 3,'batch':batch_size,'seen_percentage':0.8}
     
     data = MultiReDataset(opt=opt_dataset,transform=transforms.Compose([ToTensor(opt_dataset)]))
+
+    multi_apper_dataset = {
+                    "entity2entityID_seen": data_directory+"entity2entityID_seen.pkl", 
+                    "entity2entityID_unseen": data_directory+"entity2entityID_unseen.pkl", 
+                    "relation2relationID": data_directory+"relation2relationID.pkl",
+                    "entity_embeddings_seen": data_directory+"entity_embeddings_seen.pkl",
+                    "entity_embeddings_unseen": data_directory+"entity_embeddings_unseen.pkl", 
+                    "relation_embeddings": data_directory+"relation_embeddings.pkl",
+                    "dialog_samples": data_directory + "multi_apper_test_list.pkl", 
+                    "knowledge_graph": data_directory+"opendialkg_triples.txt",
+                    'kg_seen':data_directory+'kg_seen.pkl',
+                    'kg_unseen':data_directory+'kg_unseen.pkl',
+                    "device": device,
+                    "n_hop": 2, "n_max": 100, "max_dialogue_history": 3,'batch':batch_size,'seen_percentage':0.8}
+    
+    multi_apper_data = MultiReDataset(opt = multi_apper_dataset,transform=transforms.Compose([ToTensor(multi_apper_dataset)]))
+
 
     opt_model = {
                 "n_entity_seen": len(data.entity2entityID_seen), 
@@ -330,6 +374,8 @@ if __name__ == '__main__':
     test_seen_dataloader = DataLoader(test_seen_data, batch_size=batch_size,collate_fn=MultiRe_collate)
     test_unseen_dataloader = DataLoader(test_unseen_data, batch_size=batch_size,collate_fn=MultiRe_collate)
 
+    test_multi_apper_dataloader = DataLoader(multi_apper_data,batch_size=batch_size,collate_fn=MultiRe_collate)
+
     result_file = './result/MultiRe_early-stop_share-subgraph.csv'
 
 
@@ -346,18 +392,24 @@ if __name__ == '__main__':
 
         print(model_path)
         print('test seen')
-        path_res_seen,entity_res_seen,precision,recall_macro,f1_macro,recall_micro,f1_micro = predict_paths(model_path, test_seen_dataloader, opt_model)
+        path_res_seen,entity_res_seen,precision,recall_macro,f1_macro,recall_micro,f1_micro = predict_paths(model_path, test_seen_dataloader, opt_model,seen = True)
 
         with open(result_file, mode="a", newline="") as file:
             writer = csv.writer(file)
             writer.writerow([model_name, "seen", path_res_seen, entity_res_seen,precision,recall_macro,f1_macro,recall_micro,f1_micro])
 
         print('test unseen')
-        path_res_unseen,entity_res_unseen,precision,recall_macro,f1_macro,recall_micro,f1_micro = predict_paths(model_path, test_unseen_dataloader, opt_model)
+        path_res_unseen,entity_res_unseen,precision,recall_macro,f1_macro,recall_micro,f1_micro = predict_paths(model_path, test_unseen_dataloader, opt_model,seen = False)
 
         with open(result_file, mode="a", newline="") as file:
             writer = csv.writer(file)
             writer.writerow([model_name, "unseen", path_res_unseen, entity_res_unseen,precision,recall_macro,f1_macro,recall_micro,f1_micro])
+
+        # path_res_unseen,entity_res_unseen,precision,recall_macro,f1_macro,recall_micro,f1_micro = predict_paths(model_path, test_multi_apper_dataloader, opt_model,seen = False)
+
+        # with open(result_file, mode="a", newline="") as file:
+        #     writer = csv.writer(file)
+        #     writer.writerow([model_name, "unseen", path_res_unseen, entity_res_unseen,precision,recall_macro,f1_macro,recall_micro,f1_micro])
 
 
 

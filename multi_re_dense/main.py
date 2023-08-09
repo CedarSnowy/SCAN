@@ -4,34 +4,38 @@ from tqdm import tqdm
 from MulitRe_build import MultiReModel
 from torch.utils.data import DataLoader,Subset
 import os
-# from dataset_MR import MultiReDataset,ToTensor,MultiRe_collate
 from dataset_dense import MultiReDataset,ToTensor,MultiRe_collate
+#from dataset_dense import MultiReDataset,ToTensor,MultiRe_collate
 from torchvision import transforms
+
 
 if __name__ == '__main__':
     # 参数设置
-    data_directory = './dataset_coref/'
+    data_directory = './dataset/'
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 4
     n_hop = 2
-    n_max = -1
-    save_path = f'./models/coref/batch-{batch_size}_nhop-{n_hop}_nmax-{n_max}/'
+    n_max = 100
+    save_path = f'./models/coref_early-stop_share-subgraph/batch-{batch_size}_nhop-{n_hop}_nmax-{n_max}/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
     # 
     opt_dataset_train = {
+                        'entity2entityID_all':data_directory + 'entity2entityID_all.pkl',
                         "entity2entityID_seen": data_directory+"entity2entityID_seen.pkl", 
                         "entity2entityID_unseen": data_directory+"entity2entityID_unseen.pkl", 
+                        'entityID2entity_all':data_directory + 'entityID2entity_all.pkl',
                         "relation2relationID": data_directory+"relation2relationID.pkl",
                         "entity_embeddings_seen": data_directory+"entity_embeddings_seen.pkl",
                         "entity_embeddings_unseen": data_directory+"entity_embeddings_unseen.pkl", 
                         "relation_embeddings": data_directory+"relation_embeddings.pkl",
                         "dialog_samples": data_directory+ "dialog_samples_list.pkl", 
                         "knowledge_graph": data_directory+"opendialkg_triples.txt",
+                        'kg_whole':data_directory + 'kg_whole.pkl',
                         'kg_seen':data_directory+'kg_seen.pkl',
                         'kg_unseen':data_directory+'kg_unseen.pkl',
                         "device": device,
-                        "n_hop": n_hop, "n_max":n_max, "max_dialogue_history": 3,'batch':batch_size,'seen_percentage':0.8}
+                        "n_hop": n_hop, "n_max":n_max, "max_dialogue_history": 3,'batch':batch_size,'seen_percentage':0.8,'train_unseen_rate':0.8}
     
     data = MultiReDataset(opt=opt_dataset_train,transform=transforms.Compose([ToTensor(opt_dataset_train)]))
 

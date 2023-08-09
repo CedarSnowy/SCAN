@@ -209,14 +209,9 @@ class AttnIO(nn.Module):
 
     #调用这里
     #传一个embedding的list
-    def forward(self, graph, seed_set, dialogue_context,unseen_embeddings = None,_new = 0,last_graph = None, last_entity_rep = None):
+    def forward(self, graph, seed_set, dialogue_context,entity_embeddings = None,last_graph = None, last_entity_rep = None):
 
-        if _new == 1:
-            feat = unseen_embeddings
-
-        else:
-            # 得到对应节点的embedding,nodeId是原始节点的编号
-            feat = self.entity_embeddings(graph.ndata["nodeId"]) 
+        feat = entity_embeddings
 
         # 得到关系的embedding
         feat_rels = self.fcr(self.relation_embeddings.weight) 
@@ -232,24 +227,23 @@ class AttnIO(nn.Module):
         # print(feat.shape,feat[0].shape)
 
 
-        if last_graph is not None:
-            # print(last_entity_rep)
-            last2current = {}
-            last_nodeID = last_graph.ndata['nodeId'].tolist()
-            current_nodeID = graph.ndata['nodeId'].tolist()
+        # if last_graph is not None:
+        #     last2current = {}
+        #     last_nodeID = last_graph.ndata['nodeId'].tolist()
+        #     current_nodeID = graph.ndata['nodeId'].tolist()
 
-            for idx,elem in enumerate(last_nodeID):
-                if elem in current_nodeID:
-                    last2current[idx] = current_nodeID.index(elem)
+        #     for idx,elem in enumerate(last_nodeID):
+        #         if elem in current_nodeID:
+        #             last2current[idx] = current_nodeID.index(elem)
             
-            with torch.no_grad():
-                for key,value in last2current.items():
-                    last_entity = last_entity_rep[key].unsqueeze(0)
-                    current_entity = feat[value].unsqueeze(0)
+        #     with torch.no_grad():
+        #         for key,value in last2current.items():
+        #             last_entity = last_entity_rep[key].unsqueeze(0)
+        #             current_entity = feat[value].unsqueeze(0)
 
-                    mix_rep = self.gru_cell(last_entity,current_entity).squeeze()
+        #             mix_rep = self.gru_cell(last_entity,current_entity).squeeze()
 
-                    feat[value] = mix_rep.detach().clone()
+        #             feat[value] = mix_rep.detach().clone()
 
             # print(feat)
         
