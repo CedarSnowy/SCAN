@@ -207,7 +207,6 @@ class ToTensor(object):
                     edge_relations.extend(subgraph.edata['edge_type'].tolist())
                     source_entities = list(set(edges[1].tolist()))
 
-        #print('head',head_entities,'tail',tail_entities,'rel',edge_relations)
         edge_presence = defaultdict(int)
         for i in range(len(head_entities)):
             label = str(head_entities[i]) + '_' + str(tail_entities[i]) + '_' + str(edge_relations[i])

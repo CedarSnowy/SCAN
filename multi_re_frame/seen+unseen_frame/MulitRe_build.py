@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.nn import Embedding
 from sklearn.metrics import roc_auc_score
 from torch import tensor
-
+from Earl import Earl
 from copy import deepcopy
 
 
@@ -41,7 +41,6 @@ class MultiReModel(nn.Module):
         self.device = opt["device"]
         self.n_entity_seen = opt["n_entity_seen"]
         self.n_entity_unseen = opt["n_entity_unseen"]
-        self.n_entity_all = opt['n_entity_all']
 
         self.n_relation = opt["n_relation"]
         self.out_dim = opt["out_dim"]
@@ -61,19 +60,18 @@ class MultiReModel(nn.Module):
         self.n_hop=opt['n_hop']
         self.n_max = opt['n_max']
         self.max_edge = opt['max_edge']
-        self.share_subgraph = opt['share_subgraph']
 
-        self.entity_emb_seen = Embedding(self.n_entity_seen + 1, 768).to(self.device)
+        self.entity_emb_seen = Embedding(self.n_entity_seen + 1, 768)
         self.entity_emb_seen.weight.data.copy_(opt["entity_embeddings_seen"])
-
-        self.entity_emb_all = Embedding(self.n_entity_all + 1,768).to(self.device)
         #opt["entity_embedding"]就是所有的embedding
         self.relation_emb = Embedding(self.n_relation + 1, 768)
         self.relation_emb.weight.data.copy_(opt["relation_embeddings"])
 
-        self.attnIO = AttnIO(self.in_dim, self.out_dim, self.attn_heads, self.entity_emb_seen, self.relation_emb, self.self_loop_id, self.device,self.share_subgraph)
+        self.attnIO = AttnIO(self.in_dim, self.out_dim, self.attn_heads, self.entity_emb_seen, self.relation_emb, self.self_loop_id, self.device)
+        self.earl = Earl(self.in_dim,self.entity_emb_seen,self.relation_emb,self.device)
         
         self.attnIO = self.attnIO.cuda()
+        self.earl=self.earl.cuda()
         self.optimizer = torch.optim.Adam( filter(lambda p: p.requires_grad, self.parameters()), self.lr)
         self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, patience=10)
 
@@ -104,25 +102,24 @@ class MultiReModel(nn.Module):
             m[k] = round_sigfigs(v, 4)
         return m
 
-    def forward(self,state,dialogue_representation, extra_dialogue_representation,seed_entities, subgraph, sub_embedding,entity_state_1_jump,
+    def forward(self,dialogue_representation, extra_dialogue_representation,seed_entities, subgraph, sub_embedding,entity_state_1_jump,
                 entity_state_2_jump,head_entities_1_jump,head_entities_2_jump,tail_entities_1_jump,tail_entities_2_jump,edge_relations_1_jump,
                 edge_relations_2_jump,unseen_rel,node2nodeID,nodeID2node,last_graph , last_entity_rep):
         
-        # 直接去索引实体的embeddings
-        if state == 'train':
-            entity_embeddings = self.entity_emb_seen(subgraph.ndata['nodeId'])
-        else: # valid或test
-            entity_embeddings = self.entity_emb_all(subgraph.ndata['nodeId'])
+        entity_embeddings = self.earl(subgraph = deepcopy(subgraph),dialogue_representation = dialogue_representation, extra_dialogue_representation = extra_dialogue_representation,seed_entities = seed_entities,
+                                      sub_embedding = sub_embedding,node2nodeID = node2nodeID, nodeID2node = nodeID2node, entity_state_1_jump = entity_state_1_jump, entity_state_2_jump = entity_state_2_jump,
+                                      head_entities_1_jump = head_entities_1_jump,head_entities_2_jump = head_entities_2_jump,tail_entities_1_jump = tail_entities_1_jump,tail_entities_2_jump = tail_entities_2_jump,
+                                      edge_relations_1_jump = edge_relations_1_jump,edge_relations_2_jump = edge_relations_2_jump,unseen_rel = unseen_rel,last_graph = last_graph,last_entity_rep = last_entity_rep)
         
-        subgraph = self.attnIO(graph = subgraph, extra_dialogue_representation = extra_dialogue_representation,seed_set = seed_entities, dialogue_context = dialogue_representation,entity_embeddings = entity_embeddings,last_graph = last_graph,last_entity_rep = last_entity_rep)
+        subgraph = self.attnIO(graph = subgraph, seed_set = seed_entities, dialogue_context = dialogue_representation,entity_embeddings = entity_embeddings,last_graph = last_graph,last_entity_rep = last_entity_rep)
         return subgraph
 
 
     def process_batch(self, batch_data,train):     
+
         batch_loss = []
-        # 最后数据流过的部分
+
         for idx,one_data in enumerate(batch_data):
-            # 进入到一个主题
             one_dialog_loss = []
             state,sample_num = one_data['state'],one_data['sample_num']
             one_dialogue_representation = one_data['one_dialogue_representation']
@@ -145,7 +142,6 @@ class MultiReModel(nn.Module):
             one_startEntity_in_seenKG = one_data['one_startEntity_in_seenKG']
 
             for i in range(sample_num):
-                # 进入到一个主题内的每个sample
                 last_graph = None if i == 0 else last_graph
                 last_entity_rep = None if i == 0 else last_entity_rep
 
@@ -168,10 +164,13 @@ class MultiReModel(nn.Module):
                 nodeID2node = one_nodeID2node[i]['nodeID2node']
                 startEntity_in_seenKG = one_startEntity_in_seenKG[i]['startEntity_in_seenKG']
 
-                if len(seed_entities) == 0: # 没找到起始节点，该情况已经不会出现了
+                if len(seed_entities) == 0:
                     continue
-                if not subgraph.ndata['nodeId'].numel(): # 采样到的图一个点都没有
+                if not startEntity_in_seenKG and len(sub_embedding) == 0: # 句子中没匹配上MASK，得不到对应MASK位置的encoder
                     continue
+                if not subgraph.ndata['nodeId'].numel():
+                    continue
+                
                 else:
                     updated_subgraphs = []
                     dialogue_representation = dialogue_representation.to(self.device) # [1,768]
@@ -179,7 +178,7 @@ class MultiReModel(nn.Module):
                     subgraph = subgraph.to(self.device)
                     paths = paths.to(self.device)
 
-                    updated_subgraph, expilcit_entity_rep = self(state,dialogue_representation, extra_dialogue_representation,seed_entities, subgraph, sub_embedding,entity_state_1_jump,
+                    updated_subgraph, expilcit_entity_rep = self(dialogue_representation, extra_dialogue_representation,seed_entities, subgraph, sub_embedding,entity_state_1_jump,
                                                                  entity_state_2_jump,head_entities_1_jump,head_entities_2_jump,tail_entities_1_jump,tail_entities_2_jump,edge_relations_1_jump,
                                                                  edge_relations_2_jump,unseen_rel,node2nodeID,nodeID2node,last_graph = last_graph,last_entity_rep = last_entity_rep)
                                                                  
@@ -235,9 +234,6 @@ class MultiReModel(nn.Module):
                 cnt += 1
             train_loss /= cnt
 
-            # 
-            self.entity_emb_all.weight.data[:len(self.entity_emb_seen.weight)] = deepcopy(self.entity_emb_seen.weight.data)
-
             # 验证阶段
             dev_loss,count = 0,0
 
@@ -258,7 +254,6 @@ class MultiReModel(nn.Module):
             p = list(self.named_parameters())
             # logger.scalar_summary("Train Loss", train_loss, ins+1)
             # logger.scalar_summary("Dev Loss", dev_loss, ins+1)
-
             ins+=1
             if (epoch+1)%2==0:
                 torch.save(self.state_dict(), f'{self.model_directory}{self.model_name}_epoch-{epoch+1}')

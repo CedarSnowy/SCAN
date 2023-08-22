@@ -45,15 +45,11 @@ class MultiReDataset(Dataset):
 
         self.entity2entityID_unseen = load_pickle_file(opt['entity2entityID_unseen'])
 
-        self.entity2entityID_all = load_pickle_file(opt['entity2entityID_all'])
-
         self.relation2relationID = load_pickle_file(opt['relation2relationID'])
 
         self.entity_embeddings_seen = load_pickle_file(opt["entity_embeddings_seen"])
   
         self.entity_embeddings_unseen = load_pickle_file(opt["entity_embeddings_unseen"])
-
-        self.entity_embeddings_all = load_pickle_file(opt['entity_embeddings_all'])
         self.relation_embeddings = load_pickle_file(opt["relation_embeddings"])
         self.self_loop_id = self.relation2relationID["self loop"]
         self.n_hop = opt['n_hop']
@@ -65,11 +61,11 @@ class MultiReDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        # 第一个数据流过的部分
+        # 最先处理数据的部分
+        # 之后会跳转到ToTensor.__call__()
         process_samples = []
         if self.transform:
             dialog_samples = self.dataset[idx]
-
             dialogID = dialog_samples['dialogID']
             samples_flag = dialog_samples['samples_flag']
 
@@ -106,7 +102,6 @@ class ToTensor(object):
         self.batch = opt['batch']
         self.train_unseen_rate = opt['train_unseen_rate']
         self.max_edge = opt['max_edge']
-        self.do_predict = opt['do_predict']
 
         self.graph_train, self.graph_all = self.get_graph()
 
@@ -131,8 +126,8 @@ class ToTensor(object):
             for triple in value:
                 if triple[2] not in entity2entityID_train:
                     continue
-                #rel = relation2relationID[triple[1][:-4]]
-                rel = relation2relationID[triple[1]]
+                rel = relation2relationID[triple[1][:-4]]
+                # rel = relation2relationID[triple[1]]
                 tail = entity2entityID_train[triple[2]]
                 head_list.append(head)
                 tail_list.append(tail)
@@ -147,8 +142,8 @@ class ToTensor(object):
             for triple in value:
                 if triple[2] not in entity2entityID_all.keys():
                     continue
-                #rel = relation2relationID[triple[1][:-4]]
-                rel = relation2relationID[triple[1]]
+                rel = relation2relationID[triple[1][:-4]]
+                # rel = relation2relationID[triple[1]]
                 tail = entity2entityID_all[triple[2]]
                 head_list.append(head)
                 tail_list.append(tail)
@@ -160,26 +155,28 @@ class ToTensor(object):
 
 
     def __call__(self, sample):
-        # sample就是one_sample，单个学习样本
-        # 第二个数据流过的部分
+        # sample其实就是one_sample
+        
         start = time.time()
         flag,state = sample['flag'],sample['state']
         train_unseen = sample['train-unseen'] if 'train-unseen' in sample.keys() else 0
-        encoder_utterances = sample['utterances'] # 对上下文文本的编码
+        encoder_utterances = sample['utterances']
 
         sub_embedding = sample['MASK embedding'] if 'MASK embedding' in sample.keys() else []
-        startEntities = sample['starts'] # 起始节点
-        paths = sample['paths'] # GT Path
+        startEntities = sample['starts']
+        paths = sample['paths']
+        paths_history = sample['paths history']
         
         search_rels_index = sample['search rels index'] if 'search rels index' in sample.keys() else []
 
-        extra_dialogue_representation = torch.unsqueeze(sample['extra_utterances'],0) if 'extra_utterances' in sample.keys() else None
+
+        extra_dialogue_representation = torch.unsqueeze(sample['extra utterances']) if 'extra utterances' in sample.keys() else None
 
         dialogue_representation = torch.unsqueeze(encoder_utterances,0)
         
-        do_predict = self.do_predict if len(search_rels_index) else '0'
 
-        #do_predict = 0
+        do_predict = len(search_rels_index)
+        do_predict = 0
 
         if state == 'train':
             startEntity_in_seenKG = 1
@@ -201,14 +198,65 @@ class ToTensor(object):
 
         source_entities = deepcopy(seed_entities)
 
+
+        #print(entity_path)
+        # all,count = 0,0
+        # if entity_path[1] != entity_path[2]:
+        #     has_edge = self.graph_train.has_edges_between(entity_path[0],entity_path[2])
+        #     all += 1
+
+        #     if has_edge:
+        #         count += 1
+        #         print("存在起点到终点的边")
+        #     else:
+        #         pass
+        #         #print("不存在起点到终点的边")
+
+        # return [[] for _ in range(100)]
+
         # kg中找不到起始节点，跳过该样本
         if all(element == 0 for element in seed_entities):
             return {}
-    
+        
+
+        # ---------------- DENSE-------------------#
+        
+        # 构建子图
+        # head_entities = []
+        # tail_entities = []
+        # edge_relations = []
+
+        # successors_list = [seed_entities[0]]
+
+        # if state == 'train':
+        #     successors_list += self.graph_train.successors(seed_entities[0]).tolist()
+        #     subgraph = dgl.node_subgraph(self.graph_train,successors_list)
+
+        # elif state == 'valid' or state == 'test':
+        #     successors_list += self.graph_all.successors(seed_entities[0]).tolist()
+        #     subgraph = dgl.node_subgraph(self.graph_all,successors_list)
+
+        # node_old2new,node_new2old = {},{}
+
+        # node_new = subgraph.nodes().tolist()
+        # node_old = subgraph.ndata['_ID'].tolist()
+
+        # for i in range(len(node_new)):
+        #     node_old2new[node_old[i]] = node_new[i]
+        #     node_new2old[node_new[i]] = node_old[i]
+
+        # head_node,tail_node = subgraph.edges()[0],subgraph.edges()[1]
+        # for i in range(len(head_node)):
+        #     head_entities.append(node_new2old[head_node[i].item()])
+        #     tail_entities.append(node_new2old[tail_node[i].item()])
+        #     edge_relations.extend(subgraph.edata['edge_type'].tolist())
+
+
+
+       
+        # ---------------- DENSE(END)-------------------#
 
         # ---------------- NORMAL------------------------#
-
-        # 这部分在进行图采样
 
         head_entities_1_jump = []
         tail_entities_1_jump = []
@@ -224,22 +272,17 @@ class ToTensor(object):
             else:
                 subgraph = sample_neighbors(g=(self.graph_all), nodes=source_entities, fanout=(self.n_max), edge_dir='out')
             edges = subgraph.edges()
-            # subgraph的所有边信息
             heads = edges[0].tolist()
             tails = edges[1].tolist()
             rels = subgraph.edata['edge_type'].tolist()
-
-            # 需要三个数组来表示一张图：头，尾，关系
-            
             if i == 0:
-                if do_predict == '0' or do_predict == '2':
+                if not do_predict:
                     edges = subgraph.edges()
                     head_entities_1_jump.extend(edges[0].tolist())
                     tail_entities_1_jump.extend(edges[1].tolist())
                     edge_relations_1_jump.extend(subgraph.edata['edge_type'].tolist())
-                    source_entities = list(set(edges[1].tolist())) # 把第一跳的tail作为第二次的起点
-                elif do_predict == '1' or do_predict == '1+2':
-                    # 在做剪枝，但是效果不好
+                    source_entities = list(set(edges[1].tolist()))
+                else:
                     for idx in range(len(heads)):
                         rel_index = int(rels[idx])
                         if rel_index in search_rels_index:
@@ -248,21 +291,21 @@ class ToTensor(object):
                             edge_relations_1_jump.append(rels[idx])
                     source_entities = list(set(tail_entities_1_jump))
             elif i == 1:
-                if do_predict == '0' or do_predict == '1':
+                if not do_predict:
                     edges = subgraph.edges()
                     head_entities_2_jump.extend(edges[0].tolist())
                     tail_entities_2_jump.extend(edges[1].tolist())
                     edge_relations_2_jump.extend(subgraph.edata['edge_type'].tolist())
-                elif do_predict == '2' or do_predict == '1+2':
-                    # 在做剪枝，但是效果不好
+                else:
                     for idx in range(len(heads)):
                         rel_index = int(rels[idx])
                         if rel_index in search_rels_index:
                             head_entities_2_jump.append(heads[idx])
                             tail_entities_2_jump.append(tails[idx])
                             edge_relations_2_jump.append(rels[idx])     
+        # ----------------- NORMAL(END) -----------------#
 
-
+        
         # 整理采样到的边
         edge_presence_1_jump,edge_presence_2_jump = defaultdict(int),defaultdict(int)
         for i in range(min(self.max_edge,len(head_entities_1_jump))):
@@ -272,6 +315,26 @@ class ToTensor(object):
         for i in range(min(self.max_edge,len(head_entities_2_jump))):
             label = str(head_entities_2_jump[i]) + '_' + str(tail_entities_2_jump[i]) + '_' + str(edge_relations_2_jump[i])
             edge_presence_2_jump[label] += 1
+
+        #print(edge_presence_1_jump,edge_presence_2_jump)
+        # graph_dense,graph_normal = [],[]
+
+        #     graph_dense.append([head_entities[i],tail_entities[i],edge_relations[i]])
+
+
+
+        # for i in range(len(head_entities_2)):
+        #     #print(len(head_entities_2),len(tail_entities_2),len(edge_relations_2))
+        #     graph_normal.append([head_entities_2[i],tail_entities_2[i],edge_relations_2[i]])
+
+        # same_elements, unique_elements_list1, unique_elements_list2= compare_lists(graph_dense,graph_normal)
+
+        # print(entity_path)
+        # print("相同的元素：", len(same_elements),same_elements)
+        # print("dense独有的元素：", len(unique_elements_list1),unique_elements_list1)
+        # print("normal独有的元素：", len(unique_elements_list2),unique_elements_list2)
+
+        # return [[] for _ in range(100)]
 
         #calculate edge present frequency
         head_entities, tail_entities, edge_relations = [], [], []
@@ -295,59 +358,6 @@ class ToTensor(object):
             tail_entities.append(tail)
             edge_relations.append(relation)
 
-        # ----------------- NORMAL(END) -----------------#
-
-        # ----------------- DENSE -----------------------#
-
-        # head_entities = []
-        # tail_entities = []
-        # edge_relations = []
-
-        # successors_list = [seed_entities[0]]
-
-        # successors_list = []
-        # if state == 'train':
-        #     successors_list += self.graph_train.successors(seed_entities[0]).tolist()
-        #     subgraph = dgl.node_subgraph(self.graph_train,successors_list)
-
-        # elif state == 'valid' or state == 'test':
-        #     successors_list += self.graph_all.successors(seed_entities[0]).tolist()
-        #     subgraph = dgl.node_subgraph(self.graph_all,successors_list)
-
-        # node_old2new,node_new2old = {},{}
-
-        # node_new = subgraph.nodes().tolist()
-        # node_old = subgraph.ndata['_ID'].tolist()
-
-        # for i in range(len(node_new)):
-        #     node_old2new[node_old[i]] = node_new[i]
-        #     node_new2old[node_new[i]] = node_old[i]
-
-        # head_node,tail_node = subgraph.edges()[0],subgraph.edges()[1]
-        # for i in range(min(self.max_edge,len(head_node))):
-        #     head_entities.append(node_new2old[head_node[i].item()])
-        #     tail_entities.append(node_new2old[tail_node[i].item()])
-        #     edge_relations.extend(subgraph.edata['edge_type'].tolist())
-
-        # edge_presence = defaultdict(int)
-        # for i in range(len(head_entities)):
-        #     label = str(head_entities[i]) + '_' + str(tail_entities[i]) + '_' + str(edge_relations[i])
-        #     edge_presence[label] += 1
-
-        # #calculate edge present frequency
-        # head_entities, tail_entities, edge_relations = [], [], []
-
-        # for key, value in edge_presence.items():
-        #     head, tail, relation = key.split('_')
-        #     head = int(head)
-        #     tail = int(tail)
-        #     relation = int(relation)
-        #     head_entities.append(head)
-        #     tail_entities.append(tail)
-        #     edge_relations.append(relation)
-        # ------------------- DENSE (END) -----------------#
-
-    
 
         entities = head_entities + tail_entities + entity_path
 
@@ -355,12 +365,60 @@ class ToTensor(object):
         node2nodeID = {}
         nodeID2node = {}
         
+        entity_state = {}
+
         idx = 0
         for entity in entities:
             node2nodeID[entity] = idx
             nodeID2node[idx] = entity
             idx += 1
 
+            if state == 'train':
+                if random.random() < self.train_unseen_rate:
+                    entity_state[entity] = 1
+                else:
+                    entity_state[entity] = 0
+            else:
+                entity_name = self.entityID2entity_all[entity]
+                if entity_name in self.entity2entityID_seen.keys():
+                    entity_state[entity] = 1
+                else:
+                    entity_state[entity] = 0
+
+        head_2_jump = []
+        seen_1_tail,unseen_1_tail,seen_2_tail,unseen_2_tail = [],[],[],[]
+        seen_1_rel,unseen_1_rel,seen_2_rel,unseen_2_rel = [],[],[],[]
+
+        # 得到第一跳所有尾节点的状态
+        for i in range(len(tail_entities_1_jump)):
+            entity = tail_entities_1_jump[i]
+            rel = edge_relations_1_jump[i]
+            if entity_state[entity] == 1:
+                seen_1_tail.append(entity)
+                seen_1_rel.append(rel)
+            else:
+                unseen_1_tail.append(entity)
+                unseen_1_rel.append(rel)
+
+
+        # 得到第二跳所有尾节点的状态
+        for i in range(len(tail_entities_2_jump)):
+            entity = tail_entities_2_jump[i]
+            head = head_entities_2_jump[i]
+            rel = edge_relations_2_jump[i]
+            if entity_state[entity] == 1:
+                seen_2_tail.append(entity)
+                seen_2_rel.append(rel)
+            else:
+                unseen_2_tail.append(entity)
+                unseen_2_rel.append(rel)
+                head_2_jump.append(head)
+
+        #seen_1_tail,unseen_1_tail,seen_2_tail,unseen_2_tail = list(set(seen_1_tail)),list(set(unseen_1_tail)),list(set(seen_2_tail)),list(set(unseen_2_tail))
+        entity_state_1_jump = [seen_1_tail,unseen_1_tail]
+        entity_state_2_jump = [seen_2_tail,unseen_2_tail,head_2_jump]
+
+        unseen_rel = [unseen_1_rel,unseen_2_rel]
 
         #re-encode the graph with new index
         indexed_head_entities = [node2nodeID[head_entity] for head_entity in head_entities]
@@ -388,22 +446,17 @@ class ToTensor(object):
         edges = subgraph.edges()
         heads, relations, tails = edges[0].tolist(), edge_relations.tolist(), edges[1].tolist()
 
-
-
         # 如果没有采样到ground truth路径，则加入图中
-        successfully_sample = 1 
-        for path in paths:
-            _flag = 0
-            for j in range(len(heads)):
-                if path[0] == heads[j] and path[1] == relations[j] and path[2] == tails[j]:
-                    _flag = 1
+        if state == 'train' or state =='valid':
+            for path in paths:
+                _flag = 0
+                for j in range(len(heads)):
+                    if path[0] == heads[j] and path[1] == relations[j] and path[2] == tails[j]:
+                        _flag = 1
 
-            if not _flag:
-                if state == 'train':
+                if not _flag:
                     subgraph.add_edges(u=(torch.tensor([path[0]])), v=(torch.tensor([path[2]])), data={'edge_type': torch.tensor([path[1]])})
-                else:
-                    successfully_sample = 0
-                    
+
         return {
                 'dialogue_representation': dialogue_representation,
                 'extra_dialogue_representation':extra_dialogue_representation,
@@ -413,27 +466,26 @@ class ToTensor(object):
                 'sub_embedding': sub_embedding,
                 'node2nodeID': node2nodeID,
                 'nodeID2node': nodeID2node,
-                'entity_state_1_jump': None,
-                'entity_state_2_jump': None,
+                'entity_state_1_jump': entity_state_1_jump,
+                'entity_state_2_jump': entity_state_2_jump,
                 'head_entities_1_jump':head_entities_1_jump,
                 'head_entities_2_jump':head_entities_2_jump,
                 'tail_entities_1_jump':tail_entities_1_jump,
                 'tail_entities_2_jump':tail_entities_2_jump,
                 'edge_relations_1_jump':edge_relations_1_jump,
                 'edge_relations_2_jump':edge_relations_2_jump,
-                'unseen_rel':None,
-                'startEntity_in_seenKG': startEntity_in_seenKG,
-                'successfully_sample':successfully_sample
+                'unseen_rel':unseen_rel,
+                'startEntity_in_seenKG': startEntity_in_seenKG
             }
 
 
 def MultiRe_collate(batch): #取数据时进行堆叠
-    # 第三个数据流过的部分
+    #print('collate',batch)
 
     batch_datas =[]
 
     for data in batch:
-        # 进入到一个主题里面
+        
         dialogID,process_samples,flag,state = data[0],data[1],data[2],data[3]
 
         one_dialogue_representation = {}
@@ -454,11 +506,9 @@ def MultiRe_collate(batch): #取数据时进行堆叠
         one_edge_relations_2_jump = {}
         one_unseen_rel = {}
         one_startEntity_in_seenKG = {}
-        one_successfully_sample = {}
 
         count = 0
-        for i,sample in enumerate(process_samples):   
-            # 进入到单个主题里面的每个one_sample     
+        for i,sample in enumerate(process_samples):        
             if not len(sample):
                 continue 
             
@@ -480,7 +530,6 @@ def MultiRe_collate(batch): #取数据时进行堆叠
             one_edge_relations_2_jump[count] = {'edge_relations_2_jump': sample['edge_relations_2_jump']}
             one_unseen_rel[count] = {'unseen_rel':sample['unseen_rel']}
             one_startEntity_in_seenKG[count] = {'startEntity_in_seenKG': sample['startEntity_in_seenKG']}
-            one_successfully_sample[count] = {'successfully_sample':sample['successfully_sample']}
             count += 1
 
         one_data = {
@@ -502,7 +551,6 @@ def MultiRe_collate(batch): #取数据时进行堆叠
             'one_edge_relations_2_jump': one_edge_relations_2_jump,
             'one_unseen_rel': one_unseen_rel,
             'one_startEntity_in_seenKG': one_startEntity_in_seenKG,
-            'one_successfully_sample':one_successfully_sample,
             'flag': flag,
             'state': state,
             'sample_num':count,

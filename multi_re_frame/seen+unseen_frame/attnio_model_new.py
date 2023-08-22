@@ -172,7 +172,7 @@ class Outflow(nn.Module):
         return edge_attention
 
 class AttnIO(nn.Module):
-    def __init__(self, in_feats, out_feats, num_heads, entity_embeddings, relation_embeddings, self_loop_id, device,share_subgraph):
+    def __init__(self, in_feats, out_feats, num_heads, entity_embeddings, relation_embeddings, self_loop_id, device):
         super(AttnIO, self).__init__()
 
         self._num_heads = num_heads
@@ -180,7 +180,6 @@ class AttnIO(nn.Module):
         self._out_feats = out_feats
         self.self_loop_id = self_loop_id
         self.device = device
-        self.share_subgraph = share_subgraph
 
         # Embeddings
         self.entity_embeddings = entity_embeddings
@@ -189,10 +188,9 @@ class AttnIO(nn.Module):
         self.fcr = nn.Linear(768, self._out_feats, bias=False)
         
         self.out_w_init = nn.Parameter(torch.FloatTensor(size=(self.in_feats, self._out_feats)))
-        self.extra_init = nn.Parameter(torch.FloatTensor(size=(self.in_feats, self._out_feats)))
 
         # GRU
-        self.gru_cell = GRUCell(self.in_feats,self._out_feats)
+        self.gru_cell = GRUCell(self._out_feats,self._out_feats)
 
         # Inflow Layers
         self.inflow_layer_1 = Inflow(self._out_feats, self._out_feats, self._num_heads, self.in_feats)
@@ -207,63 +205,68 @@ class AttnIO(nn.Module):
     def reset_parameters(self):
         gain = nn.init.calculate_gain('relu')
         nn.init.xavier_normal_(self.out_w_init, gain=gain)
-        #nn.init.xavier_normal_(self.extra_init, gain=gain)
 
 
     #调用这里
     #传一个embedding的list
-    def forward(self, graph, seed_set, dialogue_context,extra_dialogue_representation,entity_embeddings = None,last_graph = None, last_entity_rep = None):
-        # 处理节点embedding
+    def forward(self, graph, seed_set, dialogue_context,entity_embeddings = None,last_graph = None, last_entity_rep = None):
+        
         feat = entity_embeddings
+
+        # 得到关系的embedding
+        feat_rels = self.fcr(self.relation_embeddings.weight) 
+        rels = graph.edata["edge_type"] # tensor形态的关系编号
+        feat_rel = feat_rels[rels]
+
+
         feat = self.fce(feat)
 
-        # 前后图，交集节点的属性传递
-        if last_graph is not None and self.share_subgraph and extra_dialogue_representation is not None:
-            last2current = {}
-            last_nodeID = last_graph.ndata['nodeId'].tolist()
-            current_nodeID = graph.ndata['nodeId'].tolist()
-            extra_dialogue_representation = extra_dialogue_representation.to(self.device) # [1,in_feats]
+        # print(feat)
 
-            extra_dialogue_representation_out_feats = torch.matmul(extra_dialogue_representation, self.out_w_init) # [1,in_feats] × [in_feats,out_feats] = [1,out_feats]
-            dialogue_context = extra_dialogue_representation
-
-            #print(extra_dialogue_representation)
-            for idx,elem in enumerate(last_nodeID):
-                if elem in current_nodeID:
-                    last2current[idx] = current_nodeID.index(elem)
-
-            #with torch.no_grad():
-            for last_ID,current_idx in last2current.items():
-                last_entity = last_entity_rep[last_ID].unsqueeze(0) # [1,out_feats]
-                #current_entity = feat[value].unsqueeze(0)
-                mix_entity_rep = self.gru_cell(extra_dialogue_representation,last_entity).squeeze()
-
-                feat[current_idx] = mix_entity_rep
-                #conversation_seedset_attention[current_idx] = torch.matmul(mix_entity_rep,extra_dialogue_representation_out_feats.t())
+        # print(feat.shape,feat[0].shape)
 
 
+        # if last_graph is not None:
+        #     last2current = {}
+        #     last_nodeID = last_graph.ndata['nodeId'].tolist()
+        #     current_nodeID = graph.ndata['nodeId'].tolist()
 
-        context = torch.matmul(dialogue_context, self.out_w_init) # [1,in_feats] × [in_feats,out_feats] = [1,out_feats]
-        conversation_seedset_attention = (torch.matmul(feat, context.t())).squeeze(1) #[feat_nums,out_feats] × [out_feats,1] = [feat_nums,1]
+        #     for idx,elem in enumerate(last_nodeID):
+        #         if elem in current_nodeID:
+        #             last2current[idx] = current_nodeID.index(elem)
+            
+        #     with torch.no_grad():
+        #         for key,value in last2current.items():
+        #             last_entity = last_entity_rep[key].unsqueeze(0)
+        #             current_entity = feat[value].unsqueeze(0)
+
+        #             mix_rep = self.gru_cell(last_entity,current_entity).squeeze()
+
+        #             feat[value] = mix_rep.detach().clone()
+
+            # print(feat)
+        
+        context = torch.matmul(dialogue_context, self.out_w_init) # [1,768] × [in_feats,out_feats]
+        conversation_seedset_attention = (torch.matmul(feat, context.t())).squeeze(1)
+
+       
 
         conversation_seedset_attention[seed_set] += 100
         conversation_seedset_attention -= 100
 
         conversation_seedset_attention = softmax(conversation_seedset_attention)
+
+        #print('seed attention',conversation_seedset_attention)
+
+        #print('conversation',conversation_seedset_attention,conversation_seedset_attention.shape,conversation_seedset_attention[0].shape)
     
         graph.ndata.update({"a_0": conversation_seedset_attention})
-
-
-        # 处理关系embedding
-        feat_rels = self.fcr(self.relation_embeddings.weight) 
-        #print(graph.edata['edge_type'])
-        rels = graph.edata["edge_type"] # tensor形态的关系编号
-        feat_rel = feat_rels[rels]
-
 
         feat_rel = feat_rel.unsqueeze(1)
         feat = feat.unsqueeze(1)
         inflow_t_1 = self.inflow_layer_1(graph, feat, feat_rel, dialogue_context)
+        #print("Inflow")
+        #print(inflow_t_1.shape)
         inflow_t_1 = inflow_t_1.unsqueeze(1)
         
         
